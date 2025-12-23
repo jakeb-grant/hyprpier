@@ -27,13 +27,27 @@ However, you must update the AUR repo if you change:
 - `PKGBUILD` (dependencies, build steps, metadata)
 - Package description or URL
 
+You should also update after pushing new commits to avoid false "update available" prompts (the `pkgver()` function generates version from git history).
+
 To update:
 ```bash
+cd /path/to/hyprpier
+
+# Regenerate pkgver from git history
+makepkg -o
+makepkg --printsrcinfo > .SRCINFO
+
+# Commit and push to GitHub
+git add PKGBUILD .SRCINFO
+git commit -m "Update pkgver"
+git push origin main
+
+# Push to AUR
 cd /tmp/hyprpier-aur  # or wherever you cloned it
 cp /path/to/hyprpier/PKGBUILD .
-makepkg --printsrcinfo > .SRCINFO
+cp /path/to/hyprpier/.SRCINFO .
 git add PKGBUILD .SRCINFO
-git commit -m "Update PKGBUILD"
+git commit -m "Update pkgver"
 git push
 ```
 
