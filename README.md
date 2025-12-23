@@ -13,11 +13,19 @@ Hyprland monitor profile manager with Thunderbolt dock detection.
 
 ## Installation
 
+### Arch Linux (AUR)
+
+```bash
+yay -S hyprpier-git
+```
+
+### Cargo
+
 ```bash
 cargo install --git https://github.com/jakeb-grant/hyprpier
 ```
 
-Or build locally:
+### Build locally
 
 ```bash
 cargo build --release
