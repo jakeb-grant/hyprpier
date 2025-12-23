@@ -23,23 +23,17 @@
 
 AUR `-git` packages pull from your GitHub repo at install time, so users get the latest code automatically when they run `yay -S hyprpier-git`.
 
-However, you must update the AUR repo if you change:
+You only need to update the AUR repo if you change:
 - `PKGBUILD` (dependencies, build steps, metadata)
+- `pkgver` (bump for new releases)
 - Package description or URL
-
-You should also update after pushing new commits to avoid false "update available" prompts (the `pkgver()` function generates version from git history).
 
 To update:
 ```bash
 cd /path/to/hyprpier
-
-# Regenerate pkgver from git history
-makepkg -o
 makepkg --printsrcinfo > .SRCINFO
-
-# Commit and push to GitHub
 git add PKGBUILD .SRCINFO
-git commit -m "Update pkgver"
+git commit -m "Update PKGBUILD"
 git push origin main
 
 # Push to AUR
@@ -47,7 +41,7 @@ cd /tmp/hyprpier-aur  # or wherever you cloned it
 cp /path/to/hyprpier/PKGBUILD .
 cp /path/to/hyprpier/.SRCINFO .
 git add PKGBUILD .SRCINFO
-git commit -m "Update pkgver"
+git commit -m "Update PKGBUILD"
 git push
 ```
 
