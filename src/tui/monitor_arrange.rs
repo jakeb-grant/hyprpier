@@ -1,14 +1,25 @@
 use ratatui::{
-    layout::{Constraint, Layout},
-    style::Style,
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{
+        canvas::{Canvas, Rectangle},
+        Block, Borders, Paragraph,
+    },
     Frame,
 };
 
 use super::profile_editor::ProfileEditorState;
 use super::styles;
 use crate::profile::{Monitor, Workspace};
+
+/// Parse resolution string "WxH" into (width, height)
+fn parse_resolution(resolution: &str) -> (f64, f64) {
+    let parts: Vec<&str> = resolution.split('x').collect();
+    let width = parts.first().and_then(|w| w.parse().ok()).unwrap_or(1920.0);
+    let height = parts.get(1).and_then(|h| h.parse().ok()).unwrap_or(1080.0);
+    (width, height)
+}
 
 pub struct MonitorArrangeState {
     pub monitors: Vec<Monitor>,
@@ -161,12 +172,151 @@ impl MonitorArrangeState {
     }
 }
 
+/// Data needed for rendering a monitor in the preview
+struct PreviewMonitor {
+    name: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    is_selected: bool,
+}
+
+/// Render the visual monitor preview using Canvas
+fn render_preview(frame: &mut Frame, area: Rect, state: &MonitorArrangeState) {
+    // Only show enabled monitors in preview
+    let enabled_monitors: Vec<(usize, &Monitor)> = state
+        .monitors
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.enabled)
+        .collect();
+
+    if enabled_monitors.is_empty() {
+        let empty = Paragraph::new("No enabled monitors")
+            .style(styles::disabled())
+            .alignment(ratatui::layout::Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Preview ")
+                    .title_style(styles::title_active())
+                    .border_style(styles::border_active()),
+            );
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // Calculate bounding box of all monitors
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+
+    for (_, monitor) in &enabled_monitors {
+        let (w, h) = parse_resolution(&monitor.resolution);
+        let x = monitor.position.x as f64;
+        let y = monitor.position.y as f64;
+
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x + w);
+        max_y = max_y.max(y + h);
+    }
+
+    let total_width = max_x - min_x;
+    let total_height = max_y - min_y;
+
+    // Canvas area (account for block borders)
+    let canvas_width = (area.width.saturating_sub(2)) as f64;
+    let canvas_height = (area.height.saturating_sub(2)) as f64;
+
+    // Terminal cells are roughly 2:1 (height:width in pixels)
+    // So we need to scale Y differently to maintain aspect ratio
+    let cell_aspect = 2.0;
+
+    // Calculate scale to fit, accounting for cell aspect ratio
+    let scale_x = canvas_width / total_width;
+    let scale_y = (canvas_height * cell_aspect) / total_height;
+    let scale = scale_x.min(scale_y);
+
+    // Pre-calculate monitor positions for the closure (avoids lifetime issues)
+    let preview_monitors: Vec<PreviewMonitor> = enabled_monitors
+        .iter()
+        .map(|(idx, monitor)| {
+            let (w, h) = parse_resolution(&monitor.resolution);
+            let x = (monitor.position.x as f64 - min_x) * scale;
+            // Flip Y: canvas Y=0 is bottom, but we want monitors at top
+            let y = (canvas_height * cell_aspect)
+                - ((monitor.position.y as f64 - min_y) * scale)
+                - (h * scale);
+
+            PreviewMonitor {
+                name: monitor.name.clone(),
+                x,
+                y,
+                width: w * scale,
+                height: h * scale,
+                is_selected: *idx == state.selected,
+            }
+        })
+        .collect();
+
+    // Use coordinate system where Y increases upward (canvas default)
+    let canvas = Canvas::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preview ")
+                .title_style(styles::title_active())
+                .border_style(styles::border_active()),
+        )
+        .x_bounds([0.0, canvas_width])
+        .y_bounds([0.0, canvas_height * cell_aspect])
+        .paint(move |ctx| {
+            // Draw non-selected monitors first
+            for pm in preview_monitors.iter().filter(|pm| !pm.is_selected) {
+                ctx.draw(&Rectangle {
+                    x: pm.x,
+                    y: pm.y,
+                    width: pm.width,
+                    height: pm.height,
+                    color: Color::Green,
+                });
+
+                let label_x = pm.x + pm.width / 2.0;
+                let label_y = pm.y + pm.height / 2.0;
+                ctx.print(label_x, label_y, Line::styled(pm.name.clone(), Style::default().fg(Color::Green)));
+            }
+
+            // Draw selected monitor last so its borders appear on top
+            // Inset slightly to avoid corner overlap with adjacent monitors
+            for pm in preview_monitors.iter().filter(|pm| pm.is_selected) {
+                let inset = 1.0;
+                ctx.draw(&Rectangle {
+                    x: pm.x + inset,
+                    y: pm.y + inset,
+                    width: pm.width - (inset * 2.0),
+                    height: pm.height - (inset * 2.0),
+                    color: Color::Yellow,
+                });
+
+                let label_x = pm.x + pm.width / 2.0;
+                let label_y = pm.y + pm.height / 2.0;
+                ctx.print(label_x, label_y, Line::styled(pm.name.clone(), Style::default().fg(Color::Yellow)));
+            }
+        });
+
+    frame.render_widget(canvas, area);
+}
+
 pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
     let chunks = Layout::vertical([
-        Constraint::Length(1), // Title
-        Constraint::Min(10),   // Monitor display
-        Constraint::Length(5), // Workspaces
-        Constraint::Length(2), // Help (no box)
+        Constraint::Length(1),  // Title
+        Constraint::Length(10), // Preview
+        Constraint::Min(6),     // Monitor list
+        Constraint::Length(5),  // Workspaces
+        Constraint::Length(2),  // Help (no box)
     ])
     .split(frame.area());
 
@@ -176,7 +326,10 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
         .alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
-    // Monitor display
+    // Preview
+    render_preview(frame, chunks[1], state);
+
+    // Monitor list
     let monitor_lines: Vec<Line> = state
         .monitors
         .iter()
@@ -220,7 +373,7 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
                 .title_style(styles::title_active())
                 .border_style(styles::border_active()),
         );
-    frame.render_widget(monitors_para, chunks[1]);
+    frame.render_widget(monitors_para, chunks[2]);
 
     // Workspaces for selected monitor
     let selected_monitor = state.monitors.get(state.selected).map(|m| &m.name);
@@ -255,7 +408,7 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
                 .title_style(styles::title_active())
                 .border_style(styles::border_active()),
         );
-    frame.render_widget(ws_para, chunks[2]);
+    frame.render_widget(ws_para, chunks[3]);
 
     // Help
     let help = Paragraph::new(vec![
@@ -274,5 +427,5 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
         ]),
     ])
     .alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(help, chunks[3]);
+    frame.render_widget(help, chunks[4]);
 }
