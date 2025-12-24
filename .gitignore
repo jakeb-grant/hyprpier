@@ -2,4 +2,6 @@
 
 # makepkg build artifacts
 /hyprpier/
-src/
+/src/hyprpier/
+/pkg/
+*.pkg.tar.zst
