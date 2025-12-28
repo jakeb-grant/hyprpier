@@ -20,6 +20,9 @@ fn generate_rules() -> Result<String> {
 # Auto-authorize all Thunderbolt devices
 ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{{authorized}}=="0", ATTR{{authorized}}="1"
 
+# Force Thunderbolt controller power on if supported (prevents D3hot sleep issues)
+ACTION=="add|change", SUBSYSTEM=="thunderbolt", RUN+="/bin/sh -c 'echo 1 > /sys/bus/wmi/devices/86CCFD48-205E-4A77-9C48-2021CBEDE341/force_power 2>/dev/null || true'"
+
 # Force PCI rescan to recover devices after resume from sleep
 ACTION=="add|change", SUBSYSTEM=="thunderbolt", RUN+="/bin/sh -c 'echo 1 > /sys/bus/pci/rescan'"
 
