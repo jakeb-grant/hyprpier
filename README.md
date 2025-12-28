@@ -19,6 +19,15 @@ Hyprland monitor profile manager with Thunderbolt dock detection.
 yay -S hyprpier-git
 ```
 
+### Prebuilt Binary
+
+Download from [Releases](https://github.com/jakeb-grant/hyprpier/releases):
+
+```bash
+tar -xzf hyprpier-v*.tar.gz
+cp hyprpier ~/.local/bin/
+```
+
 ### Cargo
 
 ```bash
@@ -193,6 +202,19 @@ This is convenient for personal use but has security implications:
 If you require Thunderbolt security, do not use `hyprpier setup`. You can still use Hyprpier for manual profile management.
 
 ## Troubleshooting
+
+**Dock not detected after resume from sleep:**
+
+The udev rules include automatic fixes for Thunderbolt controllers that fail to wake from D3hot sleep state. When a dock event occurs, the rules:
+1. Force power on via WMI (if your hardware supports it)
+2. Trigger a PCI bus rescan to recover devices
+
+If you still have issues after resume, try manually rescanning:
+```bash
+sudo sh -c 'echo 1 > /sys/bus/pci/rescan'
+```
+
+Then replug the dock. If this consistently fails, the controller may need a reboot to recover.
 
 **Daemon not receiving events:**
 ```bash
