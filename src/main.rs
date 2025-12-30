@@ -59,11 +59,21 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Setup { uninstall } => {
-            if uninstall {
-                setup::uninstall()?;
+        Commands::Setup { uninstall, resume } => {
+            if resume {
+                // Resume service management
+                if uninstall {
+                    setup::uninstall_resume_service()?;
+                } else {
+                    setup::install_resume_service()?;
+                }
             } else {
-                setup::install()?;
+                // udev rules management
+                if uninstall {
+                    setup::uninstall()?;
+                } else {
+                    setup::install()?;
+                }
             }
         }
 

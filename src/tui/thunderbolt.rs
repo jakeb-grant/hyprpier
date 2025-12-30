@@ -27,6 +27,7 @@ pub struct ThunderboltState {
     pub security_mode: String,
     pub error_message: Option<String>,
     pub auto_switch_enabled: bool,
+    pub resume_service_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -97,6 +98,7 @@ impl ThunderboltState {
             security_mode,
             error_message: None,
             auto_switch_enabled: crate::setup::is_installed(),
+            resume_service_enabled: crate::setup::is_resume_service_installed(),
         })
     }
 
@@ -200,6 +202,7 @@ impl ThunderboltState {
             self.disconnected_table = new_state.disconnected_table;
             self.security_mode = new_state.security_mode;
             self.auto_switch_enabled = new_state.auto_switch_enabled;
+            self.resume_service_enabled = new_state.resume_service_enabled;
 
             // Restore section, but switch if current section is now empty
             self.section = old_section;
@@ -254,11 +257,18 @@ pub fn render(frame: &mut Frame, state: &mut ThunderboltState) {
     } else {
         ("disabled", Color::DarkGray)
     };
+    let (resume_word, resume_color) = if state.resume_service_enabled {
+        ("enabled", Color::Green)
+    } else {
+        ("disabled", Color::DarkGray)
+    };
     let security = Paragraph::new(Line::from(vec![
         Span::raw("Security: "),
         Span::styled(&state.security_mode, Style::default().fg(security_color)),
         Span::raw(" | Auto-switch: "),
         Span::styled(auto_switch_word, Style::default().fg(auto_switch_color)),
+        Span::raw(" | Resume fix: "),
+        Span::styled(resume_word, Style::default().fg(resume_color)),
     ]))
     .alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(security, chunks[1]);
@@ -374,14 +384,20 @@ pub fn render(frame: &mut Frame, state: &mut ThunderboltState) {
 
     // Help
     let setup_action = if state.auto_switch_enabled {
-        " Disable Auto-switch"
+        " Disable"
     } else {
-        " Enable Auto-switch"
+        " Enable"
+    };
+    let resume_action = if state.resume_service_enabled {
+        " Disable"
+    } else {
+        " Enable"
     };
 
     let mut line1_spans = vec![
         Span::styled("x", styles::help_key()), Span::styled(" Unlink | ", styles::help()),
-        Span::styled("s", styles::help_key()), Span::styled(setup_action, styles::help()),
+        Span::styled("s", styles::help_key()), Span::styled(format!("{} Auto-switch | ", setup_action), styles::help()),
+        Span::styled("r", styles::help_key()), Span::styled(format!("{} Resume fix", resume_action), styles::help()),
     ];
     if has_disconnected {
         line1_spans.push(Span::styled(" | ", styles::help()));

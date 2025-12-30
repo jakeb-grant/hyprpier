@@ -47,9 +47,13 @@ pub enum Commands {
 
     /// Install/uninstall udev rules for auto-switching
     Setup {
-        /// Remove udev rules instead of installing
+        /// Remove instead of installing
         #[arg(long)]
         uninstall: bool,
+
+        /// Install/uninstall resume service (resets Thunderbolt controller on wake)
+        #[arg(long)]
+        resume: bool,
     },
 
     /// Start the background daemon

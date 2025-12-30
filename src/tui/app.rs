@@ -556,6 +556,14 @@ fn handle_thunderbolt_keys(key: KeyCode, state: &mut ThunderboltState) -> Result
                 Ok(Action::RunSudo(vec!["setup".to_string()]))
             }
         }
+        KeyCode::Char('r') => {
+            // Enable or disable resume service
+            if state.resume_service_enabled {
+                Ok(Action::RunSudo(vec!["setup".to_string(), "--resume".to_string(), "--uninstall".to_string()]))
+            } else {
+                Ok(Action::RunSudo(vec!["setup".to_string(), "--resume".to_string()]))
+            }
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             state.previous();
             Ok(Action::None)

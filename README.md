@@ -63,6 +63,8 @@ hyprpier apply <profile>   # Apply a profile
 | `hyprpier thunderbolt --status` | Show Thunderbolt security mode |
 | `hyprpier setup` | Install udev rules for auto-switching |
 | `hyprpier setup --uninstall` | Remove udev rules |
+| `hyprpier setup --resume` | Install resume fix service (resets Thunderbolt on wake) |
+| `hyprpier setup --resume --uninstall` | Remove resume fix service |
 | `hyprpier daemon` | Start the background daemon |
 
 ## TUI Keybindings
@@ -104,6 +106,7 @@ hyprpier apply <profile>   # Apply a profile
 |-----|--------|
 | `x` | Unlink dock |
 | `s` | Toggle auto-switch setup |
+| `r` | Toggle resume fix service |
 | `Tab` | Switch sections |
 
 ## Auto-Switching Setup
@@ -201,11 +204,17 @@ If you require Thunderbolt security, do not use `hyprpier setup`. You can still 
 
 **Dock not detected after resume from sleep:**
 
-The udev rules include automatic fixes for Thunderbolt controllers that fail to wake from D3hot sleep state. When a dock event occurs, the rules:
-1. Force power on via WMI (if your hardware supports it)
-2. Trigger a PCI bus rescan to recover devices
+Some Thunderbolt controllers fail to wake from D3hot sleep state. Install the resume fix service for automatic recovery:
 
-If you still have issues after resume, try manually rescanning:
+```bash
+sudo hyprpier setup --resume
+```
+
+Or press `r` in the Thunderbolt Manager (TUI). This installs a systemd service that resets the Thunderbolt controller on wake, before it can get stuck.
+
+The udev rules also include reactive fixes (PCI rescan, force power via WMI) but these only work if the controller can generate events. The resume service is more reliable.
+
+If you still have issues, try manually rescanning:
 ```bash
 sudo sh -c 'echo 1 > /sys/bus/pci/rescan'
 ```
