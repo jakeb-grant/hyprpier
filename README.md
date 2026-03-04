@@ -63,7 +63,7 @@ hyprpier apply <profile>   # Apply a profile
 | `hyprpier thunderbolt --status` | Show Thunderbolt security mode |
 | `hyprpier setup` | Install udev rules for auto-switching |
 | `hyprpier setup --uninstall` | Remove udev rules |
-| `hyprpier setup --resume` | Install resume fix service (resets Thunderbolt on wake) |
+| `hyprpier setup --resume` | Install resume fix service (resets Thunderbolt and USB on wake) |
 | `hyprpier setup --resume --uninstall` | Remove resume fix service |
 | `hyprpier daemon` | Start the background daemon |
 
@@ -202,15 +202,20 @@ If you require Thunderbolt security, do not use `hyprpier setup`. You can still 
 
 ## Troubleshooting
 
-**Dock not detected after resume from sleep:**
+**Dock or USB peripherals not working after resume from sleep:**
 
-Some Thunderbolt controllers fail to wake from D3hot sleep state. Install the resume fix service for automatic recovery:
+Some Thunderbolt controllers fail to wake from D3hot sleep state, and USB devices behind the dock (keyboards, mice, etc.) may fail to re-enumerate even when displays recover. Install the resume fix service for automatic recovery:
 
 ```bash
 sudo hyprpier setup --resume
 ```
 
-Or press `r` in the Thunderbolt Manager (TUI). This installs a systemd service that resets the Thunderbolt controller on wake, before it can get stuck.
+Or press `r` in the Thunderbolt Manager (TUI). This installs a systemd service that:
+1. Resets the Thunderbolt PCI controller on wake
+2. Rescans the PCI bus to re-enumerate downstream devices
+3. Rebinds xHCI (USB) host controllers behind the Thunderbolt bridge to recover USB peripherals
+
+Only USB controllers downstream of the Thunderbolt bridge are affected — built-in laptop USB ports are untouched.
 
 The udev rules also include reactive fixes (PCI rescan, force power via WMI) but these only work if the controller can generate events. The resume service is more reliable.
 
