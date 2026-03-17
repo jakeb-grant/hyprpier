@@ -143,7 +143,8 @@ After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c '\
-  echo 1 > /sys/bus/pci/devices/{pci}/remove; \
+  sleep 10; \
+  echo 1 > /sys/bus/pci/devices/{pci}/remove 2>/dev/null || true; \
   sleep 1; \
   echo 1 > /sys/bus/pci/rescan; \
   sleep 2; \
