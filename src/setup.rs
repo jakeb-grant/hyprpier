@@ -23,12 +23,6 @@ fn generate_rules() -> Result<String> {
 # Auto-authorize all Thunderbolt devices
 ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{{authorized}}=="0", ATTR{{authorized}}="1"
 
-# Force Thunderbolt controller power on if supported (prevents D3hot sleep issues)
-ACTION=="add|change", SUBSYSTEM=="thunderbolt", RUN+="/bin/sh -c 'echo 1 > /sys/bus/wmi/devices/86CCFD48-205E-4A77-9C48-2021CBEDE341/force_power 2>/dev/null || true'"
-
-# Force PCI rescan to recover devices after resume from sleep
-ACTION=="add|change", SUBSYSTEM=="thunderbolt", RUN+="/bin/sh -c 'echo 1 > /sys/bus/pci/rescan'"
-
 # Notify daemon of dock events
 ACTION=="add", SUBSYSTEM=="thunderbolt", RUN+="{exe} notify"
 ACTION=="remove", SUBSYSTEM=="thunderbolt", RUN+="{exe} notify"
@@ -142,11 +136,23 @@ After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate
 
 [Service]
 Type=oneshot
+TimeoutStartSec=60
 ExecStart=/bin/sh -c '\
-  sleep 10; \
-  echo 1 > /sys/bus/pci/devices/{pci}/remove 2>/dev/null || true; \
+  PCI=/sys/bus/pci/devices/{pci}; \
+  i=0; \
+  while [ ! -d "$PCI" ] && [ $i -lt 30 ]; do \
+    sleep 1; \
+    i=$((i+1)); \
+  done; \
+  [ ! -d "$PCI" ] && exit 0; \
+  echo 1 > "$PCI/remove" 2>/dev/null || true; \
   sleep 1; \
   echo 1 > /sys/bus/pci/rescan; \
+  i=0; \
+  while [ ! -d /sys/bus/thunderbolt/devices/0-0 ] && [ $i -lt 15 ]; do \
+    sleep 1; \
+    i=$((i+1)); \
+  done; \
   sleep 2; \
   for dev in /sys/bus/thunderbolt/devices/0-[1-9]*; do \
     [ -f "$dev/authorized" ] || continue; \

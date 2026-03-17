@@ -87,6 +87,11 @@ impl Daemon {
 
     /// Run the main event loop
     pub fn run(&mut self) -> Result<()> {
+        // Apply correct profile on startup (handles boot-with-dock-connected case)
+        if let Err(e) = apply::apply_auto() {
+            eprintln!("Initial auto-apply failed: {}", e);
+        }
+
         loop {
             match self.listener.accept() {
                 Ok((stream, _)) => {
