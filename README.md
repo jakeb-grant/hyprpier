@@ -2,6 +2,11 @@
 
 Hyprland monitor profile manager with Thunderbolt dock detection.
 
+[![AUR](https://img.shields.io/aur/version/hyprpier-git?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/hyprpier-git)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Hyprland doesn't know what a dock is. Plug in a Thunderbolt dock and your monitors light up, but workspaces scatter, scales reset, and your carefully arranged layout is gone. Hyprpier saves monitor profiles, detects your dock by UUID, and switches everything back automatically — including workspace assignments and lid behavior.
+
 ## Features
 
 - **Monitor Profiles** - Save and restore complete monitor configurations (resolution, refresh rate, position, scale, transform)
