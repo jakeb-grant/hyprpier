@@ -45,8 +45,8 @@ pub fn list_all_devices() -> Result<Vec<ThunderboltDevice>> {
         let name_str = name.to_string_lossy();
 
         // Only process device entries (e.g., "0-0", "0-1", "1-0")
-        // Skip "domain0", "domain1", etc.
-        if !name_str.contains('-') {
+        // Skip "domain0", "domain1", etc. and protocol interfaces like "0-0:1.1"
+        if !name_str.contains('-') || name_str.contains(':') {
             continue;
         }
 
