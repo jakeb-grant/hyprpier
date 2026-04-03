@@ -60,6 +60,21 @@ pub struct LidSwitch {
     pub on_open: String,
 }
 
+impl Monitor {
+    /// Get effective resolution accounting for transform (rotation)
+    /// When transform is 1 (90°) or 3 (270°), width and height are swapped
+    pub fn effective_resolution(&self) -> (i32, i32) {
+        let parts: Vec<&str> = self.resolution.split('x').collect();
+        let w: i32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(1920);
+        let h: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1080);
+        if self.transform == 1 || self.transform == 3 {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }

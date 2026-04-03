@@ -745,6 +745,18 @@ fn handle_monitor_arrange_keys(key: KeyCode, state: &mut MonitorArrangeState) ->
             state.move_right();
             Ok(Action::None)
         }
+        KeyCode::Char('r') => {
+            state.rotate();
+            Ok(Action::None)
+        }
+        KeyCode::Char('K') => {
+            state.align_up();
+            Ok(Action::None)
+        }
+        KeyCode::Char('J') => {
+            state.align_down();
+            Ok(Action::None)
+        }
         KeyCode::Char('d') => {
             state.toggle_disable();
             Ok(Action::None)

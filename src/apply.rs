@@ -28,6 +28,9 @@ fn apply_profile_inner(name: &str, no_runtime: bool, quiet: bool) -> Result<()> 
         // Continue anyway - will use stored names as fallback
     }
 
+    // Fix stacking gaps (snap stacked monitors to adjacent edges)
+    hyprland::fix_stacking_gaps(&mut profile.monitors);
+
     // Write config file
     hyprland::write_config(&profile)?;
 

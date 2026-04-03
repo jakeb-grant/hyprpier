@@ -155,10 +155,15 @@ pub fn generate_config(profile: &Profile) -> String {
     // Monitor lines
     for monitor in &profile.monitors {
         let line = if monitor.enabled {
-            format!(
+            let base = format!(
                 "monitor = {},{},{}x{},{}",
                 monitor.name, monitor.mode, monitor.position.x, monitor.position.y, monitor.scale
-            )
+            );
+            if monitor.transform != 0 {
+                format!("{},transform,{}", base, monitor.transform)
+            } else {
+                base
+            }
         } else {
             format!("monitor = {},disable", monitor.name)
         };
@@ -214,10 +219,15 @@ pub fn write_config(profile: &Profile) -> Result<()> {
 /// Apply a single monitor configuration via hyprctl
 pub fn apply_monitor(monitor: &Monitor) -> Result<()> {
     let cmd = if monitor.enabled {
-        format!(
+        let base = format!(
             "{},{},{}x{},{}",
             monitor.name, monitor.mode, monitor.position.x, monitor.position.y, monitor.scale
-        )
+        );
+        if monitor.transform != 0 {
+            format!("{},transform,{}", base, monitor.transform)
+        } else {
+            base
+        }
     } else {
         format!("{},disable", monitor.name)
     };
@@ -302,14 +312,152 @@ pub fn arrange_monitors(monitors: &mut [Monitor]) {
         if monitor.enabled {
             monitor.position.x = x_offset;
             monitor.position.y = 0;
-            // Parse width from resolution
-            if let Some(width_str) = monitor.resolution.split('x').next() {
-                if let Ok(width) = width_str.parse::<i32>() {
-                    x_offset += width;
+            let (w, _) = monitor.effective_resolution();
+            x_offset += w;
+        }
+    }
+}
+
+/// Fix y-gaps for stacked monitors by snapping to the nearest overlapping neighbor
+///
+/// Groups monitors into rows by horizontal adjacency (tiling x-ranges within a
+/// similar y-band). For each row group below the top, snaps its minimum y to the
+/// bottom edge of the best x-overlapping monitor above, preserving internal y-offsets.
+pub fn fix_stacking_gaps(monitors: &mut [Monitor]) {
+    let enabled: Vec<usize> = monitors
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.enabled)
+        .map(|(i, _)| i)
+        .collect();
+
+    if enabled.len() <= 1 {
+        return;
+    }
+
+    // Group into rows by horizontal adjacency:
+    // Monitors that tile horizontally (touching/overlapping x-ranges)
+    // within a similar y-band belong to the same row.
+    let row_groups = group_into_rows(&monitors, &enabled);
+
+    if row_groups.len() <= 1 {
+        return;
+    }
+
+    // Sort row groups by their minimum y
+    let mut sorted_groups = row_groups;
+    sorted_groups.sort_by_key(|group| {
+        group.iter().map(|&i| monitors[i].position.y).min().unwrap_or(0)
+    });
+
+    // For each row group below the first, snap to the bottom edge of the
+    // best overlapping monitor/group above, preserving internal y-offsets
+    for g in 1..sorted_groups.len() {
+        let group = &sorted_groups[g];
+        let group_min_y = group.iter().map(|&i| monitors[i].position.y).min().unwrap_or(0);
+
+        // Find the group x-range
+        let group_x_min = group.iter()
+            .map(|&i| monitors[i].position.x)
+            .min().unwrap_or(0);
+        let group_x_max = group.iter()
+            .map(|&i| {
+                let (w, _) = monitors[i].effective_resolution();
+                monitors[i].position.x + w
+            })
+            .max().unwrap_or(0);
+        let group_w = group_x_max - group_x_min;
+
+        // Find best overlap in any row above
+        let above_indices: Vec<usize> = sorted_groups[..g].iter().flatten().copied().collect();
+        if let Some(target_y) = best_overlap_edge(&monitors, &above_indices, group_x_min, group_w, true) {
+            let dy = target_y - group_min_y;
+            if dy != 0 {
+                for &i in group {
+                    monitors[i].position.y += dy;
                 }
             }
         }
     }
+}
+
+/// Group monitors into rows by horizontal adjacency
+/// Monitors whose x-ranges touch or overlap and are within the same y-band
+/// are considered part of the same row
+fn group_into_rows(monitors: &[Monitor], enabled: &[usize]) -> Vec<Vec<usize>> {
+    if enabled.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by y then x
+    let mut sorted: Vec<usize> = enabled.to_vec();
+    sorted.sort_by(|&a, &b| {
+        monitors[a].position.y.cmp(&monitors[b].position.y)
+            .then(monitors[a].position.x.cmp(&monitors[b].position.x))
+    });
+
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+
+    for &idx in &sorted {
+        let my = monitors[idx].position.y;
+        let (_, mh) = monitors[idx].effective_resolution();
+        let mx = monitors[idx].position.x;
+        let (mw, _) = monitors[idx].effective_resolution();
+
+        // Try to join an existing group where:
+        // 1. Y-bands overlap (this monitor's y-range intersects the group's y-range)
+        // 2. X-ranges touch (this monitor is horizontally adjacent to some group member)
+        let mut joined = false;
+        for group in &mut groups {
+            let group_y_min = group.iter().map(|&i| monitors[i].position.y).min().unwrap_or(0);
+            let group_y_max = group.iter()
+                .map(|&i| monitors[i].position.y + monitors[i].effective_resolution().1)
+                .max().unwrap_or(0);
+
+            // Check y-band overlap
+            let y_overlaps = my < group_y_max && (my + mh) > group_y_min;
+            if !y_overlaps {
+                continue;
+            }
+
+            // Check x-adjacency with any group member
+            let x_adjacent = group.iter().any(|&i| {
+                let (iw, _) = monitors[i].effective_resolution();
+                let ix = monitors[i].position.x;
+                // Touching or overlapping in x
+                mx < (ix + iw) && (mx + mw) > ix
+            });
+
+            if x_adjacent {
+                group.push(idx);
+                joined = true;
+                break;
+            }
+        }
+
+        if !joined {
+            groups.push(vec![idx]);
+        }
+    }
+
+    groups
+}
+
+/// Find the edge (bottom or top) of the monitor with the most x-overlap
+fn best_overlap_edge(monitors: &[Monitor], indices: &[usize], mx: i32, mw: i32, bottom: bool) -> Option<i32> {
+    let mut best_overlap = 0;
+    let mut best_edge = None;
+    for &j in indices {
+        let (jw, jh) = monitors[j].effective_resolution();
+        let jx = monitors[j].position.x;
+        let jy = monitors[j].position.y;
+        let overlap = (mx + mw).min(jx + jw) - mx.max(jx);
+        if overlap > best_overlap {
+            best_overlap = overlap;
+            best_edge = Some(if bottom { jy + jh } else { jy });
+        }
+    }
+    best_edge
 }
 
 /// Generate default workspaces for monitors
