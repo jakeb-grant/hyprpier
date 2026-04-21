@@ -1,4 +1,4 @@
-# Hyprpier
+# hyprpier
 
 Hyprland monitor profile manager with Thunderbolt dock detection.
 
