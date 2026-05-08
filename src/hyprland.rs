@@ -312,7 +312,7 @@ pub fn arrange_monitors(monitors: &mut [Monitor]) {
         if monitor.enabled {
             monitor.position.x = x_offset;
             monitor.position.y = 0;
-            let (w, _) = monitor.effective_resolution();
+            let (w, _) = monitor.logical_size();
             x_offset += w;
         }
     }
@@ -362,7 +362,7 @@ pub fn fix_stacking_gaps(monitors: &mut [Monitor]) {
             .min().unwrap_or(0);
         let group_x_max = group.iter()
             .map(|&i| {
-                let (w, _) = monitors[i].effective_resolution();
+                let (w, _) = monitors[i].logical_size();
                 monitors[i].position.x + w
             })
             .max().unwrap_or(0);
@@ -400,9 +400,8 @@ fn group_into_rows(monitors: &[Monitor], enabled: &[usize]) -> Vec<Vec<usize>> {
 
     for &idx in &sorted {
         let my = monitors[idx].position.y;
-        let (_, mh) = monitors[idx].effective_resolution();
         let mx = monitors[idx].position.x;
-        let (mw, _) = monitors[idx].effective_resolution();
+        let (mw, mh) = monitors[idx].logical_size();
 
         // Try to join an existing group where:
         // 1. Y-bands overlap (this monitor's y-range intersects the group's y-range)
@@ -411,7 +410,7 @@ fn group_into_rows(monitors: &[Monitor], enabled: &[usize]) -> Vec<Vec<usize>> {
         for group in &mut groups {
             let group_y_min = group.iter().map(|&i| monitors[i].position.y).min().unwrap_or(0);
             let group_y_max = group.iter()
-                .map(|&i| monitors[i].position.y + monitors[i].effective_resolution().1)
+                .map(|&i| monitors[i].position.y + monitors[i].logical_size().1)
                 .max().unwrap_or(0);
 
             // Check y-band overlap
@@ -422,7 +421,7 @@ fn group_into_rows(monitors: &[Monitor], enabled: &[usize]) -> Vec<Vec<usize>> {
 
             // Check x-adjacency with any group member
             let x_adjacent = group.iter().any(|&i| {
-                let (iw, _) = monitors[i].effective_resolution();
+                let (iw, _) = monitors[i].logical_size();
                 let ix = monitors[i].position.x;
                 // Touching or overlapping in x
                 mx < (ix + iw) && (mx + mw) > ix
@@ -448,7 +447,7 @@ fn best_overlap_edge(monitors: &[Monitor], indices: &[usize], mx: i32, mw: i32, 
     let mut best_overlap = 0;
     let mut best_edge = None;
     for &j in indices {
-        let (jw, jh) = monitors[j].effective_resolution();
+        let (jw, jh) = monitors[j].logical_size();
         let jx = monitors[j].position.x;
         let jy = monitors[j].position.y;
         let overlap = (mx + mw).min(jx + jw) - mx.max(jx);
@@ -501,4 +500,47 @@ pub fn generate_lid_switch(monitors: &[Monitor]) -> Option<LidSwitch> {
         on_close: "disable".to_string(),
         on_open: format!("{},0x0,1", edp.mode),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrange_monitors_no_gaps_with_mixed_scales() {
+        let mut monitors = vec![
+            Monitor::test_fixture("DP-10", "3840x2160", 1.5, 0),
+            Monitor::test_fixture("DP-11", "3840x2160", 1.5, 0),
+            Monitor::test_fixture("DP-6", "1920x1080", 1.0, 3),
+            Monitor::test_fixture("eDP-1", "1920x1200", 1.0, 0),
+        ];
+        arrange_monitors(&mut monitors);
+
+        assert_eq!(monitors[0].position.x, 0);
+        assert_eq!(monitors[1].position.x, 2560);
+        assert_eq!(monitors[2].position.x, 5120);
+        assert_eq!(monitors[3].position.x, 6200);
+
+        for i in 1..monitors.len() {
+            let (prev_w, _) = monitors[i - 1].logical_size();
+            let expected = monitors[i - 1].position.x + prev_w;
+            assert_eq!(
+                monitors[i].position.x, expected,
+                "gap between monitor {} and {}", i - 1, i
+            );
+        }
+    }
+
+    #[test]
+    fn arrange_monitors_unscaled_unchanged_behavior() {
+        let mut monitors = vec![
+            Monitor::test_fixture("eDP-1", "1920x1200", 1.0, 0),
+            Monitor::test_fixture("DP-2", "1920x1080", 1.0, 0),
+            Monitor::test_fixture("DP-6", "1920x1080", 1.0, 0),
+        ];
+        arrange_monitors(&mut monitors);
+        assert_eq!(monitors[0].position.x, 0);
+        assert_eq!(monitors[1].position.x, 1920);
+        assert_eq!(monitors[2].position.x, 3840);
+    }
 }

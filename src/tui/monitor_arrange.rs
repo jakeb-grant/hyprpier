@@ -158,12 +158,12 @@ impl MonitorArrangeState {
     /// Includes left-align, center-align, right-align, and right-edge positions
     fn collect_x_snap_points(&self) -> Vec<i32> {
         let my_row = self.rows[self.selected];
-        let (my_w, _) = self.monitors[self.selected].effective_resolution();
+        let (my_w, _) = self.monitors[self.selected].logical_size();
         let mut points = Vec::new();
         points.push(0);
         for (i, monitor) in self.monitors.iter().enumerate() {
             if self.rows[i] != my_row && monitor.enabled {
-                let (w, _) = monitor.effective_resolution();
+                let (w, _) = monitor.logical_size();
                 let x = monitor.position.x;
                 points.push(x);                       // Left-align
                 points.push(x + (w - my_w) / 2);     // Center-align
@@ -233,11 +233,11 @@ impl MonitorArrangeState {
     /// Collect vertical alignment snap points within the current row
     fn collect_y_snap_points_in_row(&self) -> Vec<i32> {
         let my_row = self.rows[self.selected];
-        let (_, my_h) = self.monitors[self.selected].effective_resolution();
+        let (_, my_h) = self.monitors[self.selected].logical_size();
 
         let row_height = self.monitors.iter().enumerate()
             .filter(|(i, m)| self.rows[*i] == my_row && m.enabled)
-            .map(|(_, m)| m.effective_resolution().1)
+            .map(|(_, m)| m.logical_size().1)
             .max()
             .unwrap_or(my_h);
 
@@ -324,7 +324,7 @@ impl MonitorArrangeState {
         let mut row_heights = vec![0i32; num_rows];
         for (i, monitor) in self.monitors.iter().enumerate() {
             if monitor.enabled {
-                let (_, h) = monitor.effective_resolution();
+                let (_, h) = monitor.logical_size();
                 let r = self.rows[i] as usize;
                 if r < row_heights.len() {
                     row_heights[r] = row_heights[r].max(h);
@@ -352,7 +352,7 @@ impl MonitorArrangeState {
                 // Multi-monitor row: auto-layout left-to-right with y_offsets
                 let mut x_offset = 0;
                 for &i in indices {
-                    let (w, mh) = self.monitors[i].effective_resolution();
+                    let (w, mh) = self.monitors[i].logical_size();
                     let max_offset = (row_heights[r] - mh).max(0);
                     self.y_offsets[i] = self.y_offsets[i].clamp(0, max_offset);
                     self.monitors[i].position.x = x_offset;
@@ -361,7 +361,7 @@ impl MonitorArrangeState {
                 }
             } else if indices.len() == 1 {
                 let i = indices[0];
-                let (mw, _) = self.monitors[i].effective_resolution();
+                let (mw, _) = self.monitors[i].logical_size();
                 let mx = self.monitors[i].position.x;
                 self.y_offsets[i] = 0; // Single-monitor rows: y from overlap, not offset
 
@@ -374,7 +374,7 @@ impl MonitorArrangeState {
                     // Row 0 with single monitor: find overlap in row below
                     // and set y so our bottom edge meets their top
                     let below_top = self.best_overlap_top(r + 1, &row_indices, mx, mw);
-                    let (_, mh) = self.monitors[i].effective_resolution();
+                    let (_, mh) = self.monitors[i].logical_size();
                     below_top.map(|t| t - mh).unwrap_or(0)
                 } else {
                     row_y_offsets[r]
@@ -391,7 +391,7 @@ impl MonitorArrangeState {
         let mut best_overlap = 0;
         let mut best_bottom = None;
         for &j in &row_indices[row] {
-            let (jw, jh) = self.monitors[j].effective_resolution();
+            let (jw, jh) = self.monitors[j].logical_size();
             let jx = self.monitors[j].position.x;
             let jy = self.monitors[j].position.y;
             let overlap = (mx + mw).min(jx + jw) - mx.max(jx);
@@ -409,7 +409,7 @@ impl MonitorArrangeState {
         let mut best_overlap = 0;
         let mut best_top = None;
         for &j in &row_indices[row] {
-            let (jw, _) = self.monitors[j].effective_resolution();
+            let (jw, _) = self.monitors[j].logical_size();
             let jx = self.monitors[j].position.x;
             let jy = self.monitors[j].position.y;
             let overlap = (mx + mw).min(jx + jw) - mx.max(jx);
@@ -486,7 +486,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &MonitorArrangeState) {
     let mut max_y = f64::MIN;
 
     for (_, monitor) in &enabled_monitors {
-        let (ew, eh) = monitor.effective_resolution();
+        let (ew, eh) = monitor.logical_size();
         let (w, h) = (ew as f64, eh as f64);
         let x = monitor.position.x as f64;
         let y = monitor.position.y as f64;
@@ -520,7 +520,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &MonitorArrangeState) {
     let preview_monitors: Vec<PreviewMonitor> = enabled_monitors
         .iter()
         .map(|(idx, monitor)| {
-            let (ew, eh) = monitor.effective_resolution();
+            let (ew, eh) = monitor.logical_size();
             let (w, h) = (ew as f64, eh as f64);
             let x = (monitor.position.x as f64 - min_x) * scale;
             // Flip Y: canvas Y=0 is bottom, but we want monitors at top

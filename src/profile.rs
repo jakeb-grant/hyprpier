@@ -61,16 +61,43 @@ pub struct LidSwitch {
 }
 
 impl Monitor {
-    /// Get effective resolution accounting for transform (rotation)
-    /// When transform is 1 (90°) or 3 (270°), width and height are swapped
-    pub fn effective_resolution(&self) -> (i32, i32) {
-        let parts: Vec<&str> = self.resolution.split('x').collect();
-        let w: i32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(1920);
-        let h: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1080);
-        if self.transform == 1 || self.transform == 3 {
+    /// Hyprland positions monitors using logical (post-scale) coordinates: a
+    /// 3840×2160 panel at scale 1.5 occupies a 2560×1440 region. All layout math
+    /// (positions, gaps, adjacency) must use logical sizes to match what
+    /// Hyprland actually does.
+    pub fn logical_size(&self) -> (i32, i32) {
+        let (w, h) = self.resolution
+            .split_once('x')
+            .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
+            .unwrap_or((1920, 1080));
+        let (pw, ph) = if self.transform == 1 || self.transform == 3 {
             (h, w)
         } else {
             (w, h)
+        };
+        let scale = if self.scale.is_finite() && self.scale > 0.0 {
+            self.scale
+        } else {
+            1.0
+        };
+        (
+            (pw as f64 / scale).round() as i32,
+            (ph as f64 / scale).round() as i32,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(name: &str, resolution: &str, scale: f64, transform: u8) -> Self {
+        Self {
+            name: name.to_string(),
+            description: None,
+            enabled: true,
+            resolution: resolution.to_string(),
+            refresh_rate: 60.0,
+            position: Position { x: 0, y: 0 },
+            scale,
+            transform,
+            mode: format!("{}@60", resolution),
         }
     }
 }
@@ -190,4 +217,58 @@ pub fn list_profiles() -> Result<Vec<String>> {
 
     profiles.sort();
     Ok(profiles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn m(resolution: &str, scale: f64, transform: u8) -> Monitor {
+        Monitor::test_fixture("test", resolution, scale, transform)
+    }
+
+    #[test]
+    fn logical_size_unscaled_unrotated() {
+        assert_eq!(m("1920x1080", 1.0, 0).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_4k_at_1_5x() {
+        assert_eq!(m("3840x2160", 1.5, 0).logical_size(), (2560, 1440));
+    }
+
+    #[test]
+    fn logical_size_rotated_270_unscaled() {
+        assert_eq!(m("1920x1080", 1.0, 3).logical_size(), (1080, 1920));
+    }
+
+    #[test]
+    fn logical_size_rotated_270_at_1_5x() {
+        assert_eq!(m("1920x1080", 1.5, 3).logical_size(), (720, 1280));
+    }
+
+    #[test]
+    fn logical_size_rotated_180_no_swap() {
+        assert_eq!(m("1920x1080", 1.0, 2).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_zero_scale_falls_back_to_one() {
+        assert_eq!(m("1920x1080", 0.0, 0).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_negative_scale_falls_back_to_one() {
+        assert_eq!(m("1920x1080", -1.5, 0).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_nan_scale_falls_back_to_one() {
+        assert_eq!(m("1920x1080", f64::NAN, 0).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_infinite_scale_falls_back_to_one() {
+        assert_eq!(m("1920x1080", f64::INFINITY, 0).logical_size(), (1920, 1080));
+    }
 }
