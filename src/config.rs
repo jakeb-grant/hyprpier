@@ -32,9 +32,9 @@ pub fn metadata_path() -> Result<PathBuf> {
     Ok(profile_dir()?.join(".metadata.json"))
 }
 
-/// Get the Hyprland monitors.conf output path (~/.config/hypr/monitors.conf)
-pub fn hyprland_monitors_conf() -> Result<PathBuf> {
-    Ok(config_dir()?.join("hypr").join("monitors.conf"))
+/// Get the Hyprland monitors.lua output path (~/.config/hypr/monitors.lua)
+pub fn hyprland_monitors_lua() -> Result<PathBuf> {
+    Ok(config_dir()?.join("hypr").join("monitors.lua"))
 }
 
 /// Ensure the profile directory exists

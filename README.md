@@ -177,12 +177,14 @@ Profiles are stored in `~/.config/hyprpier/`:
 └── ...
 ```
 
-Hyprland config is written to `~/.config/hypr/monitors.conf`. Source it from your main config:
+Hyprland config is written to `~/.config/hypr/monitors.lua` (Hyprland 0.55+ Lua format). Require it from your main `hyprland.lua`:
 
-```bash
-# hyprland.conf
-source = ~/.config/hypr/monitors.conf
+```lua
+-- hyprland.lua
+pcall(require, "monitors")
 ```
+
+`pcall` keeps the config loading cleanly if hyprpier hasn't generated a profile yet.
 
 ## How It Works
 
