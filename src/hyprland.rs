@@ -173,25 +173,40 @@ pub fn generate_config(profile: &Profile) -> String {
         }
     }
 
-    // Lid switch bindings: bind directly to native hl.monitor calls.
-    // Hyprland 0.55's non-legacy parser rejects `hyprctl keyword`, so the old
-    // hl.dsp.exec_cmd("hyprctl keyword monitor ...") form is a silent no-op.
-    // Re-enable parameters come from the profile's record for the lid output.
+    // Lid switch bindings.
+    //
+    // On lid close: `hl.monitor({ output, disabled = true })` works fine via
+    // the runtime bind context, so the close handler disables natively.
+    //
+    // On lid open: Hyprland 0.55's runtime `hl.monitor({...})` does NOT
+    // re-enable a monitor that was previously disabled by a runtime call
+    // (returns ok, monitor stays disabled). The reliable way to bring it back
+    // is `hyprctl reload`, which re-evaluates the top-level `hl.monitor({...})`
+    // lines from this very file. After reload the DRM panel needs a moment
+    // before DPMS can be re-asserted, so we defer the dpms-on with hl.timer
+    // per Hyprland's reference doc recommendation (§15: "Recommended for
+    // delayed DPMS/idle dispatch").
+    //
+    // Reload also re-applies workspace_rules — addresses the "workspace
+    // re-homing on lid open" follow-up from the original bug report.
     if let Some(ref lid) = profile.lid_switch {
         if lid.enabled {
-            if let Some(mon) = profile.monitors.iter().find(|m| m.name == lid.monitor) {
+            if profile.monitors.iter().any(|m| m.name == lid.monitor) {
                 lines.push(String::new());
                 lines.push("-- Lid switch handling".to_string());
                 lines.push(format!(
                     "hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({{ output = {}, disabled = true }}) end, {{ locked = true }})",
-                    lua_str(&mon.name)
+                    lua_str(&lid.monitor)
                 ));
-                let mut open_mon = mon.clone();
-                open_mon.enabled = true;
+                lines.push("hl.bind(\"switch:off:Lid Switch\", function()".to_string());
+                lines.push("  hl.dispatch(hl.dsp.exec_cmd(\"hyprctl reload\"))".to_string());
+                lines.push("  hl.timer(function()".to_string());
                 lines.push(format!(
-                    "hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({{ {} }}) end, {{ locked = true }})",
-                    lua_monitor_fields(&open_mon)
+                    "    hl.dispatch(hl.dsp.dpms({{ action = \"on\", monitor = {} }}))",
+                    lua_str(&lid.monitor)
                 ));
+                lines.push("  end, { timeout = 500, type = \"oneshot\" })".to_string());
+                lines.push("end, { locked = true })".to_string());
             }
         }
     }
@@ -621,14 +636,10 @@ mod tests {
     }
 
     #[test]
-    fn generate_config_emits_native_lid_binds() {
+    fn generate_config_emits_native_lid_close_bind() {
         let out = generate_config(&make_profile());
         assert!(
             out.contains("hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", disabled = true }) end, { locked = true })"),
-            "got:\n{}", out
-        );
-        assert!(
-            out.contains("hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", mode = \"1920x1200@60\", position = \"0x0\", scale = 1.0 }) end, { locked = true })"),
             "got:\n{}", out
         );
         assert!(
@@ -638,14 +649,28 @@ mod tests {
     }
 
     #[test]
-    fn generate_config_lid_bind_reflects_monitor_record_transform() {
-        let mut p = make_profile();
-        // eDP-1 is monitors[0]; give it a rotation
-        p.monitors[0].transform = 1;
-        p.monitors[0].position = Position { x: 100, y: 50 };
-        let out = generate_config(&p);
+    fn generate_config_emits_reload_plus_dpms_on_open() {
+        // Runtime `hl.monitor({...})` cannot re-enable a previously-disabled
+        // monitor on Hyprland 0.55. Open handler must reload + dpms-on.
+        let out = generate_config(&make_profile());
         assert!(
-            out.contains("hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", mode = \"1920x1200@60\", position = \"100x50\", scale = 1.0, transform = 1 }) end, { locked = true })"),
+            out.contains("hl.bind(\"switch:off:Lid Switch\", function()"),
+            "got:\n{}", out
+        );
+        assert!(
+            out.contains("hl.dispatch(hl.dsp.exec_cmd(\"hyprctl reload\"))"),
+            "got:\n{}", out
+        );
+        assert!(
+            out.contains("hl.dispatch(hl.dsp.dpms({ action = \"on\", monitor = \"eDP-1\" }))"),
+            "got:\n{}", out
+        );
+        assert!(
+            out.contains("hl.timer(function()"),
+            "dpms-on must be deferred via hl.timer per Hyprland's docs:\n{}", out
+        );
+        assert!(
+            out.contains("{ timeout = 500, type = \"oneshot\" }"),
             "got:\n{}", out
         );
     }
