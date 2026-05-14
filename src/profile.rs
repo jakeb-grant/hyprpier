@@ -56,8 +56,6 @@ pub struct Workspace {
 pub struct LidSwitch {
     pub enabled: bool,
     pub monitor: String,
-    pub on_close: String,
-    pub on_open: String,
 }
 
 impl Monitor {

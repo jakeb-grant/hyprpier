@@ -157,26 +157,7 @@ pub fn generate_config(profile: &Profile) -> String {
 
     // Monitor entries
     for monitor in &profile.monitors {
-        if monitor.enabled {
-            let mut fields = vec![
-                format!("output = {}", lua_str(&monitor.name)),
-                format!("mode = {}", lua_str(&monitor.mode)),
-                format!(
-                    "position = \"{}x{}\"",
-                    monitor.position.x, monitor.position.y
-                ),
-                format!("scale = {}", lua_num(monitor.scale)),
-            ];
-            if monitor.transform != 0 {
-                fields.push(format!("transform = {}", monitor.transform));
-            }
-            lines.push(format!("hl.monitor({{ {} }})", fields.join(", ")));
-        } else {
-            lines.push(format!(
-                "hl.monitor({{ output = {}, disabled = true }})",
-                lua_str(&monitor.name)
-            ));
-        }
+        lines.push(format!("hl.monitor({{ {} }})", lua_monitor_fields(monitor)));
     }
 
     if !profile.workspaces.is_empty() {
@@ -192,30 +173,54 @@ pub fn generate_config(profile: &Profile) -> String {
         }
     }
 
-    // Lid switch bindings
+    // Lid switch bindings: bind directly to native hl.monitor calls.
+    // Hyprland 0.55's non-legacy parser rejects `hyprctl keyword`, so the old
+    // hl.dsp.exec_cmd("hyprctl keyword monitor ...") form is a silent no-op.
+    // Re-enable parameters come from the profile's record for the lid output.
     if let Some(ref lid) = profile.lid_switch {
         if lid.enabled {
-            lines.push(String::new());
-            lines.push("-- Lid switch handling".to_string());
-            lines.push(format!(
-                "hl.bind(\"switch:on:Lid Switch\", hl.dsp.exec_cmd({}), {{ locked = true }})",
-                lua_str(&format!(
-                    "hyprctl keyword monitor \"{},{}\"",
-                    lid.monitor, lid.on_close
-                ))
-            ));
-            lines.push(format!(
-                "hl.bind(\"switch:off:Lid Switch\", hl.dsp.exec_cmd({}), {{ locked = true }})",
-                lua_str(&format!(
-                    "hyprctl keyword monitor \"{},{}\"",
-                    lid.monitor, lid.on_open
-                ))
-            ));
+            if let Some(mon) = profile.monitors.iter().find(|m| m.name == lid.monitor) {
+                lines.push(String::new());
+                lines.push("-- Lid switch handling".to_string());
+                lines.push(format!(
+                    "hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({{ output = {}, disabled = true }}) end, {{ locked = true }})",
+                    lua_str(&mon.name)
+                ));
+                let mut open_mon = mon.clone();
+                open_mon.enabled = true;
+                lines.push(format!(
+                    "hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({{ {} }}) end, {{ locked = true }})",
+                    lua_monitor_fields(&open_mon)
+                ));
+            }
         }
     }
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Format the inner fields of an `hl.monitor({...})` call for a monitor.
+///
+/// Disabled monitors emit `output = "X", disabled = true`. Enabled monitors
+/// emit `output`, `mode`, `position`, `scale`, and `transform` (when nonzero).
+fn lua_monitor_fields(monitor: &Monitor) -> String {
+    if !monitor.enabled {
+        return format!("output = {}, disabled = true", lua_str(&monitor.name));
+    }
+    let mut fields = vec![
+        format!("output = {}", lua_str(&monitor.name)),
+        format!("mode = {}", lua_str(&monitor.mode)),
+        format!(
+            "position = \"{}x{}\"",
+            monitor.position.x, monitor.position.y
+        ),
+        format!("scale = {}", lua_num(monitor.scale)),
+    ];
+    if monitor.transform != 0 {
+        fields.push(format!("transform = {}", monitor.transform));
+    }
+    fields.join(", ")
 }
 
 /// Format a value as a Lua double-quoted string with escapes for `\` and `"`.
@@ -263,49 +268,46 @@ pub fn write_config(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-/// Apply a single monitor configuration via hyprctl
+/// Apply a single monitor configuration via hyprctl eval.
+///
+/// Hyprland 0.55's non-legacy (Lua) parser rejects `hyprctl keyword monitor`,
+/// so we invoke the native `hl.monitor({...})` API through `hyprctl eval`.
 pub fn apply_monitor(monitor: &Monitor) -> Result<()> {
-    let cmd = if monitor.enabled {
-        let base = format!(
-            "{},{},{}x{},{}",
-            monitor.name, monitor.mode, monitor.position.x, monitor.position.y, monitor.scale
-        );
-        if monitor.transform != 0 {
-            format!("{},transform,{}", base, monitor.transform)
-        } else {
-            base
-        }
-    } else {
-        format!("{},disable", monitor.name)
-    };
-
-    let output = hyprctl_command()
-        .args(["keyword", "monitor", &cmd])
-        .output()
-        .context("Failed to run hyprctl")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("hyprctl failed: {}", stderr);
-    }
-
-    Ok(())
+    let expr = format!("hl.monitor({{ {} }})", lua_monitor_fields(monitor));
+    hyprctl_eval(&expr).with_context(|| format!("Failed to apply monitor {}", monitor.name))
 }
 
-/// Move a workspace to a monitor
+/// Move a workspace to a monitor via hyprctl eval.
+///
+/// Replaces `hyprctl dispatch moveworkspacetomonitor`, which is rejected by
+/// Hyprland 0.55's non-legacy parser.
 pub fn move_workspace(workspace_id: u8, monitor: &str) -> Result<()> {
+    let expr = format!(
+        "hl.dispatch(hl.dsp.workspace.move({{ workspace = {}, monitor = {} }}))",
+        workspace_id,
+        lua_str(monitor)
+    );
+    hyprctl_eval(&expr).with_context(|| format!("Failed to move workspace {}", workspace_id))
+}
+
+/// Run `hyprctl eval <expr>` and surface non-zero exit or in-band Lua errors.
+fn hyprctl_eval(expr: &str) -> Result<()> {
     let output = hyprctl_command()
-        .args([
-            "dispatch",
-            "moveworkspacetomonitor",
-            &format!("{} {}", workspace_id, monitor),
-        ])
+        .args(["eval", expr])
         .output()
-        .context("Failed to move workspace")?;
+        .context("Failed to run hyprctl eval")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to move workspace: {}", stderr);
+        anyhow::bail!("hyprctl eval failed: {}", stderr.trim());
+    }
+
+    // hyprctl eval surfaces Lua errors as stdout starting with "error:" but
+    // exits 0. Treat that as a failure so callers (and retries) notice.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.starts_with("error:") {
+        anyhow::bail!("hyprctl eval failed: {}", trimmed);
     }
 
     Ok(())
@@ -544,8 +546,6 @@ pub fn generate_lid_switch(monitors: &[Monitor]) -> Option<LidSwitch> {
     Some(LidSwitch {
         enabled: true,
         monitor: edp.name.clone(),
-        on_close: "disable".to_string(),
-        on_open: format!("{},0x0,1", edp.mode),
     })
 }
 
@@ -593,8 +593,6 @@ mod tests {
             lid_switch: Some(LidSwitch {
                 enabled: true,
                 monitor: "eDP-1".to_string(),
-                on_close: "disable".to_string(),
-                on_open: "1920x1200@60,0x0,1".to_string(),
             }),
         }
     }
@@ -623,15 +621,45 @@ mod tests {
     }
 
     #[test]
-    fn generate_config_emits_lid_binds() {
+    fn generate_config_emits_native_lid_binds() {
         let out = generate_config(&make_profile());
         assert!(
-            out.contains("hl.bind(\"switch:on:Lid Switch\", hl.dsp.exec_cmd(\"hyprctl keyword monitor \\\"eDP-1,disable\\\"\"), { locked = true })"),
+            out.contains("hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", disabled = true }) end, { locked = true })"),
             "got:\n{}", out
         );
         assert!(
-            out.contains("hl.bind(\"switch:off:Lid Switch\", hl.dsp.exec_cmd(\"hyprctl keyword monitor \\\"eDP-1,1920x1200@60,0x0,1\\\"\"), { locked = true })"),
+            out.contains("hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", mode = \"1920x1200@60\", position = \"0x0\", scale = 1.0 }) end, { locked = true })"),
             "got:\n{}", out
+        );
+        assert!(
+            !out.contains("hyprctl keyword"),
+            "generator must not shell to `hyprctl keyword` from inside Lua binds:\n{}", out
+        );
+    }
+
+    #[test]
+    fn generate_config_lid_bind_reflects_monitor_record_transform() {
+        let mut p = make_profile();
+        // eDP-1 is monitors[0]; give it a rotation
+        p.monitors[0].transform = 1;
+        p.monitors[0].position = Position { x: 100, y: 50 };
+        let out = generate_config(&p);
+        assert!(
+            out.contains("hl.bind(\"switch:off:Lid Switch\", function() hl.monitor({ output = \"eDP-1\", mode = \"1920x1200@60\", position = \"100x50\", scale = 1.0, transform = 1 }) end, { locked = true })"),
+            "got:\n{}", out
+        );
+    }
+
+    #[test]
+    fn generate_config_skips_lid_binds_when_monitor_missing() {
+        let mut p = make_profile();
+        // Point lid_switch at an output that isn't in the profile
+        p.lid_switch.as_mut().unwrap().monitor = "eDP-99".to_string();
+        let out = generate_config(&p);
+        assert!(
+            !out.contains("Lid Switch"),
+            "lid binds must be skipped when the referenced output isn't in the profile:\n{}",
+            out
         );
     }
 
