@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -109,35 +110,53 @@ pub fn detect_monitors() -> Result<Vec<Monitor>> {
 /// Resolve stored monitor descriptions to current port names
 /// This allows profiles to work even when dock assigns different port names
 pub fn resolve_monitor_names(profile: &mut Profile) -> Result<()> {
-    // Get current monitors from Hyprland
     let current_monitors = detect_monitors()?;
+    resolve_monitor_names_with(profile, &current_monitors);
+    Ok(())
+}
 
-    for monitor in &mut profile.monitors {
-        if let Some(ref desc) = monitor.description {
-            // Find current monitor with matching description
-            if let Some(current) = current_monitors.iter().find(|m| {
-                m.description.as_ref() == Some(desc)
-            }) {
-                let old_name = std::mem::replace(&mut monitor.name, current.name.clone());
-
-                // Update workspace references
-                for ws in &mut profile.workspaces {
-                    if ws.monitor == old_name {
-                        ws.monitor = current.name.clone();
-                    }
-                }
-
-                // Update lid_switch reference
-                if let Some(ref mut lid) = profile.lid_switch {
-                    if lid.monitor == old_name {
-                        lid.monitor = current.name.clone();
-                    }
-                }
-            }
+/// Apply description-based port-name remapping using a pre-fetched current
+/// monitor list. Split out for testability.
+///
+/// Computes the full `old_name -> new_name` map in one pass before applying
+/// any renames. A per-monitor rename-and-walk approach miscompiles port
+/// swaps (e.g. profile DP-10/DP-8 ↔ live DP-8/DP-10): renaming monitor A's
+/// workspaces from DP-10 to DP-8 collides with monitor B's still-unrenamed
+/// label DP-8, so the next pass re-renames A's workspaces a second time.
+fn resolve_monitor_names_with(profile: &mut Profile, current: &[Monitor]) {
+    let mut renames: HashMap<String, String> = HashMap::new();
+    for monitor in &profile.monitors {
+        let Some(desc) = monitor.description.as_ref() else { continue };
+        let Some(live) = current
+            .iter()
+            .find(|m| m.description.as_ref() == Some(desc))
+        else {
+            continue;
+        };
+        if live.name != monitor.name {
+            renames.insert(monitor.name.clone(), live.name.clone());
         }
     }
 
-    Ok(())
+    if renames.is_empty() {
+        return;
+    }
+
+    for monitor in &mut profile.monitors {
+        if let Some(new_name) = renames.get(&monitor.name) {
+            monitor.name = new_name.clone();
+        }
+    }
+    for ws in &mut profile.workspaces {
+        if let Some(new_name) = renames.get(&ws.monitor) {
+            ws.monitor = new_name.clone();
+        }
+    }
+    if let Some(ref mut lid) = profile.lid_switch {
+        if let Some(new_name) = renames.get(&lid.monitor) {
+            lid.monitor = new_name.clone();
+        }
+    }
 }
 
 /// Generate Hyprland Lua config content from a profile
@@ -615,6 +634,83 @@ mod tests {
                 "gap between monitor {} and {}", i - 1, i
             );
         }
+    }
+
+    fn monitor_with_desc(name: &str, desc: &str) -> Monitor {
+        let mut m = Monitor::test_fixture(name, "1920x1080", 1.0, 0);
+        m.description = Some(desc.to_string());
+        m
+    }
+
+    #[test]
+    fn resolve_monitor_names_handles_port_swap() {
+        // Profile labels two identical-model monitors as DP-10 / DP-8 keyed
+        // by description; this dock session reshuffles them so the
+        // descriptions land on swapped ports DP-8 / DP-10. A per-monitor
+        // rename-and-walk approach would collide on the shared old/new
+        // label and double-rename one set of workspaces. The two-phase
+        // resolver must land each monitor's workspaces on its own screen.
+        let mut profile = Profile {
+            name: "swap".to_string(),
+            description: None,
+            monitors: vec![
+                monitor_with_desc("DP-10", "Display A"),
+                monitor_with_desc("DP-8", "Display B"),
+                monitor_with_desc("DP-6", "Display C"),
+            ],
+            workspaces: vec![
+                Workspace { id: 1, monitor: "DP-10".to_string(), default: true },
+                Workspace { id: 2, monitor: "DP-10".to_string(), default: false },
+                Workspace { id: 5, monitor: "DP-8".to_string(), default: true },
+                Workspace { id: 6, monitor: "DP-8".to_string(), default: false },
+                Workspace { id: 9, monitor: "DP-6".to_string(), default: true },
+            ],
+            lid_switch: None,
+        };
+        let current = vec![
+            monitor_with_desc("DP-8", "Display A"),  // was DP-10 in profile
+            monitor_with_desc("DP-10", "Display B"), // was DP-8 in profile
+            monitor_with_desc("DP-9", "Display C"),  // was DP-6 in profile
+        ];
+
+        resolve_monitor_names_with(&mut profile, &current);
+
+        assert_eq!(profile.monitors[0].name, "DP-8");
+        assert_eq!(profile.monitors[1].name, "DP-10");
+        assert_eq!(profile.monitors[2].name, "DP-9");
+
+        // Workspaces from profile DP-10 (Display A) must end up on live DP-8.
+        assert_eq!(profile.workspaces[0].monitor, "DP-8");
+        assert_eq!(profile.workspaces[1].monitor, "DP-8");
+        // Workspaces from profile DP-8 (Display B) must end up on live DP-10
+        // and NOT also get caught by the DP-10 → DP-8 rename above.
+        assert_eq!(profile.workspaces[2].monitor, "DP-10");
+        assert_eq!(profile.workspaces[3].monitor, "DP-10");
+        // Workspaces from profile DP-6 (Display C) must end up on live DP-9.
+        assert_eq!(profile.workspaces[4].monitor, "DP-9");
+    }
+
+    #[test]
+    fn resolve_monitor_names_preserves_unchanged_names() {
+        let mut profile = Profile {
+            name: "stable".to_string(),
+            description: None,
+            monitors: vec![monitor_with_desc("eDP-1", "Laptop")],
+            workspaces: vec![Workspace {
+                id: 1,
+                monitor: "eDP-1".to_string(),
+                default: true,
+            }],
+            lid_switch: Some(LidSwitch {
+                enabled: true,
+                monitor: "eDP-1".to_string(),
+            }),
+        };
+        let current = vec![monitor_with_desc("eDP-1", "Laptop")];
+        resolve_monitor_names_with(&mut profile, &current);
+        assert_eq!(profile.monitors[0].name, "eDP-1");
+        assert_eq!(profile.workspaces[0].monitor, "eDP-1");
+        assert_eq!(profile.lid_switch.as_ref().unwrap().monitor, "eDP-1");
     }
 
     fn make_profile() -> Profile {
