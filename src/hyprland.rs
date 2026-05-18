@@ -357,6 +357,30 @@ pub fn apply_runtime(profile: &Profile) -> Result<()> {
         }
     }
 
+    // Reload so the freshly-written hl.workspace_rule lines take effect in
+    // Hyprland's in-memory state, and `configreloaded` fires for bars/tools
+    // that cache workspace rules. Eval-style apply above can't re-evaluate
+    // workspace_rule lines, so a reload is the only way to refresh them.
+    if let Err(e) = hyprctl_reload() {
+        eprintln!("Warning: hyprctl reload failed after apply: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Run `hyprctl reload` to re-evaluate hyprland.lua (and the monitors.lua
+/// it sources via pcall) so workspace_rule lines and other top-level state
+/// pick up the freshly-written profile.
+fn hyprctl_reload() -> Result<()> {
+    let output = hyprctl_command()
+        .arg("reload")
+        .output()
+        .context("Failed to run hyprctl reload")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("hyprctl reload failed: {}", stderr.trim());
+    }
     Ok(())
 }
 
