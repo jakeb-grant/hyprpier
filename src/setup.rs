@@ -43,6 +43,16 @@ pub fn install() -> Result<()> {
 
     println!("Installed udev rules to {}", UDEV_RULES_PATH);
 
+    let exe = std::env::current_exe()?;
+    println!();
+    println!("Note: the rules auto-authorize every Thunderbolt device on connect.");
+    println!("      This disables Thunderbolt security checks (DMA attack surface);");
+    println!("      only use it on machines where you control physical access.");
+    println!("Note: the rules invoke this binary by absolute path:");
+    println!("        {}", exe.display());
+    println!("      If you move or delete it, re-run `hyprpier setup`.");
+    println!();
+
     // Reload udev rules
     let _ = std::process::Command::new("udevadm")
         .args(["control", "--reload-rules"])

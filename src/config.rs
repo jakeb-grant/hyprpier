@@ -11,15 +11,34 @@ fn config_dir() -> Result<PathBuf> {
             && sudo_user.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
 
         if is_valid {
-            let path = PathBuf::from(format!("/home/{}/.config", sudo_user));
-            // Extra safety: ensure the resolved path is under /home/
-            if path.starts_with("/home/") {
-                return Ok(path);
-            }
+            // Resolve the real home from /etc/passwd; fall back to
+            // /home/{user} for users resolved via NSS (LDAP etc.) that
+            // aren't listed there.
+            let home = home_from_passwd(&sudo_user)
+                .unwrap_or_else(|| PathBuf::from(format!("/home/{}", sudo_user)));
+            return Ok(home.join(".config"));
         }
     }
 
     dirs::config_dir().context("Could not find config directory")
+}
+
+/// Look up a user's home directory in /etc/passwd
+/// (format: name:passwd:uid:gid:gecos:home:shell)
+fn home_from_passwd(user: &str) -> Option<PathBuf> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next()? != user {
+            return None;
+        }
+        let home = fields.nth(4)?;
+        if home.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(home))
+        }
+    })
 }
 
 /// Get the profile directory (~/.config/hyprpier/)

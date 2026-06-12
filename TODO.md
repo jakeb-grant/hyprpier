@@ -70,11 +70,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
     `src/tui/monitor_arrange.rs` `remove_selected` doesn't drop workspaces
     referencing the removed output. *Fix:* retain-filter + update defaults.
 
-14. `[ ]` **`config_dir` hardcodes `/home/{user}` under sudo** —
+14. `[x]` **`config_dir` hardcodes `/home/{user}` under sudo** —
     `src/config.rs`. Wrong for non-standard homes (e.g. `/var/home`).
     *Fix:* look up the home dir from `/etc/passwd`.
 
-15. `[ ]` **udev rule auto-authorizes all Thunderbolt devices silently** —
+15. `[x]` **udev rule auto-authorizes all Thunderbolt devices silently** —
     `src/setup.rs`. Disables TB security (DMA surface) with no warning;
     also bakes `current_exe()` path into the rule. *Fix:* warn at install
     time about both.
