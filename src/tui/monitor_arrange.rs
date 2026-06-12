@@ -119,6 +119,7 @@ impl MonitorArrangeState {
             if let Some(&swap_idx) = row_mates.iter().filter(|&&i| i < self.selected).last() {
                 self.monitors.swap(self.selected, swap_idx);
                 self.rows.swap(self.selected, swap_idx);
+                self.y_offsets.swap(self.selected, swap_idx);
                 self.selected = swap_idx;
                 self.recalculate_positions();
             }
@@ -147,6 +148,7 @@ impl MonitorArrangeState {
             if let Some(&swap_idx) = row_mates.iter().find(|&&i| i > self.selected) {
                 self.monitors.swap(self.selected, swap_idx);
                 self.rows.swap(self.selected, swap_idx);
+                self.y_offsets.swap(self.selected, swap_idx);
                 self.selected = swap_idx;
                 self.recalculate_positions();
             }
@@ -288,9 +290,13 @@ impl MonitorArrangeState {
 
     pub fn remove_selected(&mut self) {
         if !self.monitors.is_empty() {
-            self.monitors.remove(self.selected);
+            let removed = self.monitors.remove(self.selected);
             self.rows.remove(self.selected);
             self.y_offsets.remove(self.selected);
+            // Drop workspaces pointing at the removed output so the profile
+            // doesn't emit workspace_rules for a monitor it no longer has.
+            self.workspaces.retain(|w| w.monitor != removed.name);
+            self.update_defaults();
             if self.selected >= self.monitors.len() && self.selected > 0 {
                 self.selected -= 1;
             }

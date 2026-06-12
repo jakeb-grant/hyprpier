@@ -58,15 +58,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
     `write_config` uses plain `fs::write`; it's the one file Hyprland
     actually reads (incl. mid-`hyprctl reload`). *Fix:* temp + rename.
 
-11. `[ ]` **`generate_workspaces` starves the third monitor** —
+11. `[x]` **`generate_workspaces` starves the third monitor** —
     `src/hyprland.rs`. "5 each" → monitors 1–2 take all 10 workspaces,
     monitor 3+ gets none. *Fix:* distribute `10 / count` with remainder.
 
-12. `[ ]` **`y_offsets` not swapped on monitor swap** —
+12. `[x]` **`y_offsets` not swapped on monitor swap** —
     `src/tui/monitor_arrange.rs` `move_left/move_right` swap `monitors` and
     `rows` but not `y_offsets`; alignment stays with the slot. *Fix:* swap it.
 
-13. `[ ]` **Removing a monitor leaves its workspaces** —
+13. `[x]` **Removing a monitor leaves its workspaces** —
     `src/tui/monitor_arrange.rs` `remove_selected` doesn't drop workspaces
     referencing the removed output. *Fix:* retain-filter + update defaults.
 
