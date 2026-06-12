@@ -17,6 +17,9 @@ pub fn apply_profile_quiet(name: &str, no_runtime: bool) -> Result<()> {
 }
 
 fn apply_profile_inner(name: &str, no_runtime: bool, quiet: bool) -> Result<()> {
+    // The TUI validates on save, but the CLI accepts arbitrary names;
+    // reject path-traversal names like `../../x` before touching the fs.
+    crate::profile::validate_profile_name(name)?;
     let mut profile = Profile::load(name)?;
 
     // Resolve stored monitor descriptions to current port names

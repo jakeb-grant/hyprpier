@@ -116,7 +116,7 @@ impl MonitorArrangeState {
 
         if !row_mates.is_empty() {
             // Swap with nearest left neighbor in same row
-            if let Some(&swap_idx) = row_mates.iter().filter(|&&i| i < self.selected).last() {
+            if let Some(&swap_idx) = row_mates.iter().rfind(|&&i| i < self.selected) {
                 self.monitors.swap(self.selected, swap_idx);
                 self.rows.swap(self.selected, swap_idx);
                 self.y_offsets.swap(self.selected, swap_idx);
@@ -338,7 +338,7 @@ impl MonitorArrangeState {
 
     fn recalculate_positions(&mut self) {
         // Normalize rows: remap to 0..N with no gaps
-        let mut unique_rows: Vec<i32> = self.rows.iter().copied().collect();
+        let mut unique_rows: Vec<i32> = self.rows.to_vec();
         unique_rows.sort();
         unique_rows.dedup();
         for row in &mut self.rows {
@@ -540,7 +540,7 @@ fn render_preview(frame: &mut Frame, area: Rect, state: &MonitorArrangeState) {
     let scale = scale_x.min(scale_y);
 
     // Inset for selected monitor border (proportional to scale)
-    let inset = (100.0 * scale).max(0.5).min(3.0);
+    let inset = (100.0 * scale).clamp(0.5, 3.0);
 
     // Pre-calculate monitor positions for the closure (avoids lifetime issues)
     let preview_monitors: Vec<PreviewMonitor> = enabled_monitors

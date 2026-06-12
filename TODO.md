@@ -81,11 +81,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
 
 ## Minor
 
-16. `[ ]` Dead `bottom: bool` param in `best_overlap_edge` (always `true`) —
+16. `[x]` Dead `bottom: bool` param in `best_overlap_edge` (always `true`) —
     `src/hyprland.rs`.
-17. `[ ]` `get_hyprland_instance_signature` picks an arbitrary dir when
+17. `[x]` `get_hyprland_instance_signature` picks an arbitrary dir when
     multiple Hyprland instances exist; prefer most recent — `src/hyprland.rs`.
-18. `[ ]` CLI `apply <name>` skips `validate_profile_name` (TUI validates,
+18. `[x]` CLI `apply <name>` skips `validate_profile_name` (TUI validates,
     CLI doesn't) — `src/apply.rs`.
-19. `[ ]` Clippy warnings (6): collapsible if, manual clamp, `to_vec`,
+19. `[x]` Clippy warnings (6): collapsible if, manual clamp, `to_vec`,
     needless `last()` on double-ended iterator, needless borrows.
+
+---
+
+All 19 items fixed (2026-06-12). `cargo test`: 24 passed. `cargo clippy`: clean.

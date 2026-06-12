@@ -19,18 +19,27 @@ fn get_hyprland_instance_signature() -> Option<String> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok()?;
     let hypr_dir = std::path::Path::new(&runtime_dir).join("hypr");
 
+    // Instance signatures look like:
+    // 386376400119dd46a767c9f8c8791fd22c7b6e61_1766260165_608814011
+    // With multiple instances (or leftovers from crashed ones), prefer the
+    // most recently modified directory — that's the live session.
+    let mut best: Option<(std::time::SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir(&hypr_dir) {
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            // Instance signatures look like: 386376400119dd46a767c9f8c8791fd22c7b6e61_1766260165_608814011
+            let name_str = entry.file_name().to_string_lossy().to_string();
             if name_str.contains('_') && entry.path().is_dir() {
-                return Some(name_str.to_string());
+                let mtime = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                    best = Some((mtime, name_str));
+                }
             }
         }
     }
 
-    None
+    best.map(|(_, sig)| sig)
 }
 
 /// Create a hyprctl Command with the instance signature set
@@ -209,24 +218,22 @@ pub fn generate_config(profile: &Profile) -> String {
     // Reload also re-applies workspace_rules — addresses the "workspace
     // re-homing on lid open" follow-up from the original bug report.
     if let Some(ref lid) = profile.lid_switch {
-        if lid.enabled {
-            if profile.monitors.iter().any(|m| m.name == lid.monitor) {
-                lines.push(String::new());
-                lines.push("-- Lid switch handling".to_string());
-                lines.push(format!(
-                    "hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({{ output = {}, disabled = true }}) end, {{ locked = true }})",
-                    lua_str(&lid.monitor)
-                ));
-                lines.push("hl.bind(\"switch:off:Lid Switch\", function()".to_string());
-                lines.push("  hl.dispatch(hl.dsp.exec_cmd(\"hyprctl reload\"))".to_string());
-                lines.push("  hl.timer(function()".to_string());
-                lines.push(format!(
-                    "    hl.dispatch(hl.dsp.dpms({{ action = \"on\", monitor = {} }}))",
-                    lua_str(&lid.monitor)
-                ));
-                lines.push("  end, { timeout = 500, type = \"oneshot\" })".to_string());
-                lines.push("end, { locked = true })".to_string());
-            }
+        if lid.enabled && profile.monitors.iter().any(|m| m.name == lid.monitor) {
+            lines.push(String::new());
+            lines.push("-- Lid switch handling".to_string());
+            lines.push(format!(
+                "hl.bind(\"switch:on:Lid Switch\", function() hl.monitor({{ output = {}, disabled = true }}) end, {{ locked = true }})",
+                lua_str(&lid.monitor)
+            ));
+            lines.push("hl.bind(\"switch:off:Lid Switch\", function()".to_string());
+            lines.push("  hl.dispatch(hl.dsp.exec_cmd(\"hyprctl reload\"))".to_string());
+            lines.push("  hl.timer(function()".to_string());
+            lines.push(format!(
+                "    hl.dispatch(hl.dsp.dpms({{ action = \"on\", monitor = {} }}))",
+                lua_str(&lid.monitor)
+            ));
+            lines.push("  end, { timeout = 500, type = \"oneshot\" })".to_string());
+            lines.push("end, { locked = true })".to_string());
         }
     }
 
@@ -450,7 +457,7 @@ pub fn fix_stacking_gaps(monitors: &mut [Monitor]) {
     // Group into rows by horizontal adjacency:
     // Monitors that tile horizontally (touching/overlapping x-ranges)
     // within a similar y-band belong to the same row.
-    let row_groups = group_into_rows(&monitors, &enabled);
+    let row_groups = group_into_rows(monitors, &enabled);
 
     if row_groups.len() <= 1 {
         return;
@@ -482,7 +489,7 @@ pub fn fix_stacking_gaps(monitors: &mut [Monitor]) {
 
         // Find best overlap in any row above
         let above_indices: Vec<usize> = sorted_groups[..g].iter().flatten().copied().collect();
-        if let Some(target_y) = best_overlap_edge(&monitors, &above_indices, group_x_min, group_w, true) {
+        if let Some(target_y) = best_overlap_bottom_edge(monitors, &above_indices, group_x_min, group_w) {
             let dy = target_y - group_min_y;
             if dy != 0 {
                 for &i in group {
@@ -554,8 +561,8 @@ fn group_into_rows(monitors: &[Monitor], enabled: &[usize]) -> Vec<Vec<usize>> {
     groups
 }
 
-/// Find the edge (bottom or top) of the monitor with the most x-overlap
-fn best_overlap_edge(monitors: &[Monitor], indices: &[usize], mx: i32, mw: i32, bottom: bool) -> Option<i32> {
+/// Find the bottom edge (y + height) of the monitor with the most x-overlap
+fn best_overlap_bottom_edge(monitors: &[Monitor], indices: &[usize], mx: i32, mw: i32) -> Option<i32> {
     let mut best_overlap = 0;
     let mut best_edge = None;
     for &j in indices {
@@ -565,7 +572,7 @@ fn best_overlap_edge(monitors: &[Monitor], indices: &[usize], mx: i32, mw: i32, 
         let overlap = (mx + mw).min(jx + jw) - mx.max(jx);
         if overlap > best_overlap {
             best_overlap = overlap;
-            best_edge = Some(if bottom { jy + jh } else { jy });
+            best_edge = Some(jy + jh);
         }
     }
     best_edge
@@ -581,12 +588,9 @@ pub fn generate_workspaces(monitors: &[Monitor]) -> Vec<Workspace> {
 
     for (i, monitor) in enabled_monitors.iter().enumerate() {
         // Distribute the 10 workspaces evenly; earlier monitors absorb the
-        // remainder (e.g. 3 monitors -> 4/3/3, not 5/5/0).
-        let ws_count = if count == 0 {
-            0
-        } else {
-            10 / count + usize::from(i < 10 % count)
-        };
+        // remainder (e.g. 3 monitors -> 4/3/3, not 5/5/0). count >= 1 here
+        // since we're iterating the enabled monitors.
+        let ws_count = 10 / count + usize::from(i < 10 % count);
 
         for j in 0..ws_count {
             if ws_id > 10 {
