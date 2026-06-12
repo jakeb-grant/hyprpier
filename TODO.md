@@ -32,7 +32,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
    Save under a new name leaves the old file and stale metadata references.
    *Fix:* rename semantics — delete old file, migrate metadata references.
 
-6. `[ ]` **Flipped transforms (4–7) mishandled** — `src/profile.rs`
+6. `[x]` **Flipped transforms (4–7) mishandled** — `src/profile.rs`
    `logical_size` swaps only for transforms 1/3, but 5/7 (flipped-90/270)
    also swap dimensions. `rotate()` does `(t+1)%4`, destroying the flip bit.
    Rotation display shows `450°` for transform 5. *Fix:* swap on odd

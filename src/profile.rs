@@ -68,7 +68,10 @@ impl Monitor {
             .split_once('x')
             .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
             .unwrap_or((1920, 1080));
-        let (pw, ph) = if self.transform == 1 || self.transform == 3 {
+        // Transforms follow wl_output_transform: bit 2 (value 4) is the
+        // flipped flag, low 2 bits are rotation. Odd rotations (90/270,
+        // flipped or not: 1, 3, 5, 7) swap width and height.
+        let (pw, ph) = if self.transform % 2 == 1 {
             (h, w)
         } else {
             (w, h)
@@ -248,6 +251,21 @@ mod tests {
     #[test]
     fn logical_size_rotated_180_no_swap() {
         assert_eq!(m("1920x1080", 1.0, 2).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_flipped_no_swap() {
+        assert_eq!(m("1920x1080", 1.0, 4).logical_size(), (1920, 1080));
+        assert_eq!(m("1920x1080", 1.0, 6).logical_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn logical_size_flipped_rotated_swaps() {
+        // Transforms 5 (flipped-90) and 7 (flipped-270) swap dimensions
+        // just like their unflipped counterparts 1 and 3.
+        assert_eq!(m("1920x1080", 1.0, 5).logical_size(), (1080, 1920));
+        assert_eq!(m("1920x1080", 1.0, 7).logical_size(), (1080, 1920));
+        assert_eq!(m("1920x1080", 1.5, 7).logical_size(), (720, 1280));
     }
 
     #[test]

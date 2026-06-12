@@ -272,7 +272,9 @@ impl MonitorArrangeState {
 
     pub fn rotate(&mut self) {
         if let Some(monitor) = self.monitors.get_mut(self.selected) {
-            monitor.transform = (monitor.transform + 1) % 4;
+            // Rotate only the low 2 bits; bit 2 is the wl_output flip flag
+            // and must survive rotation.
+            monitor.transform = (monitor.transform & 4) | ((monitor.transform + 1) & 3);
             self.recalculate_positions();
         }
     }
@@ -632,10 +634,16 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
             let selected = i == state.selected;
             let prefix = if selected { ">> " } else { "   " };
             let status = if m.enabled { "" } else { " [DISABLED]" };
-            let rotation = if m.transform != 0 {
-                format!(" R:{}°", m.transform as u16 * 90)
-            } else {
-                String::new()
+            let rotation = {
+                let degrees = (m.transform & 3) as u16 * 90;
+                let flip = if m.transform & 4 != 0 { " flipped" } else { "" };
+                if degrees == 0 && flip.is_empty() {
+                    String::new()
+                } else if degrees == 0 {
+                    flip.to_string()
+                } else {
+                    format!(" R:{}°{}", degrees, flip)
+                }
             };
             // Show truncated description if available
             let desc_info = m.description.as_ref()
