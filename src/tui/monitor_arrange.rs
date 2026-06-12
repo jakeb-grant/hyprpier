@@ -105,6 +105,9 @@ impl MonitorArrangeState {
     }
 
     pub fn move_left(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         let my_row = self.rows[self.selected];
         let row_mates: Vec<usize> = self.monitors.iter().enumerate()
             .filter(|(i, m)| *i != self.selected && self.rows[*i] == my_row && m.enabled)
@@ -130,6 +133,9 @@ impl MonitorArrangeState {
     }
 
     pub fn move_right(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         let my_row = self.rows[self.selected];
         let row_mates: Vec<usize> = self.monitors.iter().enumerate()
             .filter(|(i, m)| *i != self.selected && self.rows[*i] == my_row && m.enabled)
@@ -177,12 +183,18 @@ impl MonitorArrangeState {
     }
 
     pub fn move_up(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         self.rows[self.selected] -= 1;
         self.y_offsets[self.selected] = 0;
         self.recalculate_positions();
     }
 
     pub fn move_down(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         self.rows[self.selected] += 1;
         self.y_offsets[self.selected] = 0;
         self.recalculate_positions();
@@ -190,6 +202,9 @@ impl MonitorArrangeState {
 
     /// Context-sensitive upward action: align within row or move to row above
     pub fn align_up(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         let my_row = self.rows[self.selected];
         let has_row_mates = self.monitors.iter().enumerate()
             .any(|(i, m)| i != self.selected && self.rows[i] == my_row && m.enabled);
@@ -211,6 +226,9 @@ impl MonitorArrangeState {
 
     /// Context-sensitive downward action: align within row or move to row below
     pub fn align_down(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
         let my_row = self.rows[self.selected];
         let has_row_mates = self.monitors.iter().enumerate()
             .any(|(i, m)| i != self.selected && self.rows[i] == my_row && m.enabled);
@@ -620,13 +638,9 @@ pub fn render(frame: &mut Frame, state: &mut MonitorArrangeState) {
                 String::new()
             };
             // Show truncated description if available
-            let desc_info = m.description.as_ref().map(|d| {
-                if d.len() > 35 {
-                    format!(" ({}...)", &d[..35])
-                } else {
-                    format!(" ({})", d)
-                }
-            }).unwrap_or_default();
+            let desc_info = m.description.as_ref()
+                .map(|d| format!(" ({})", super::truncate_chars(d, 35)))
+                .unwrap_or_default();
 
             let style = if selected {
                 styles::list_selected()

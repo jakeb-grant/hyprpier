@@ -106,6 +106,16 @@ impl App {
 
     /// Run the TUI application
     pub fn run(&mut self) -> Result<()> {
+        // Restore the terminal before printing any panic message; otherwise
+        // a panic unwinds past the cleanup below and leaves the user's shell
+        // in raw mode + alternate screen.
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            original_hook(info);
+        }));
+
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();

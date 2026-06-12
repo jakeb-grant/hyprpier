@@ -174,13 +174,9 @@ pub fn render(frame: &mut Frame, state: &mut ProfileEditorState) {
         .iter()
         .map(|m| {
             let status = if m.enabled { "" } else { " (disabled)" };
-            let desc_info = m.description.as_ref().map(|d| {
-                if d.len() > 40 {
-                    format!(" ({}...)", &d[..40])
-                } else {
-                    format!(" ({})", d)
-                }
-            }).unwrap_or_default();
+            let desc_info = m.description.as_ref()
+                .map(|d| format!(" ({})", super::truncate_chars(d, 40)))
+                .unwrap_or_default();
             let text = format!(
                 "{}{}:  {} @ {}x{}{}",
                 m.name, desc_info, m.resolution, m.position.x, m.position.y, status
