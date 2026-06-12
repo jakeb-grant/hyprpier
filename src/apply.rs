@@ -50,12 +50,38 @@ fn apply_profile_inner(name: &str, no_runtime: bool, quiet: bool) -> Result<()> 
     Ok(())
 }
 
+/// Check whether the written monitors.lua already matches what applying
+/// this profile would generate (after port-name resolution and gap fixes).
+///
+/// Metadata saying a profile is "active" isn't enough to skip a re-apply:
+/// a dock replug can hand out different port names while the active profile
+/// stays the same (e.g. when no undocked fallback is configured). Any
+/// rename shows up in the generated config, so comparing against the file
+/// on disk catches exactly that case.
+fn profile_up_to_date(name: &str) -> bool {
+    let Ok(mut profile) = Profile::load(name) else {
+        return false;
+    };
+    if hyprland::resolve_monitor_names(&mut profile).is_err() {
+        return false;
+    }
+    hyprland::fix_stacking_gaps(&mut profile.monitors);
+    let expected = hyprland::generate_config(&profile);
+
+    let Ok(path) = crate::config::hyprland_monitors_lua() else {
+        return false;
+    };
+    std::fs::read_to_string(path).map(|cur| cur == expected).unwrap_or(false)
+}
+
 /// Auto-detect dock and apply appropriate profile
 ///
 /// Note: Only supports one dock at a time. If multiple docks are connected,
 /// the first one with a linked profile wins.
 ///
-/// Skips applying if the target profile is already active (no duplicate notifications).
+/// Skips applying if the target profile is already active AND its generated
+/// config is still current (no duplicate notifications, but port-name
+/// reshuffles on replug still trigger a re-apply).
 pub fn apply_auto() -> Result<()> {
     let metadata = Metadata::load()?;
     let docks = dock::detect_docks()?;
@@ -64,8 +90,8 @@ pub fn apply_auto() -> Result<()> {
     // Check if any connected dock has a linked profile
     for d in &docks {
         if let Some(profile_name) = metadata.get_dock_profile(&d.uuid) {
-            // Skip if already on this profile
-            if current_profile == Some(profile_name) {
+            // Skip if already on this profile and the config is current
+            if current_profile == Some(profile_name) && profile_up_to_date(profile_name) {
                 return Ok(());
             }
             println!("Detected dock: {} ({})", d.name, d.uuid);
@@ -79,8 +105,8 @@ pub fn apply_auto() -> Result<()> {
 
     // No dock found or no linked profile - use undocked profile
     if let Some(ref undocked) = metadata.undocked_profile {
-        // Skip if already on this profile
-        if current_profile == Some(undocked.as_str()) {
+        // Skip if already on this profile and the config is current
+        if current_profile == Some(undocked.as_str()) && profile_up_to_date(undocked) {
             return Ok(());
         }
         if docks.is_empty() {

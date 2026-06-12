@@ -42,7 +42,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
    `a` (apply) in the profile list and `d` (detect) in the editor propagate
    `?` up and exit the TUI. *Fix:* surface in an error message instead.
 
-8. `[ ]` **Dock reconnect with same active profile skips port re-resolution**
+8. `[x]` **Dock reconnect with same active profile skips port re-resolution**
    — `src/apply.rs`. `apply_auto` early-returns on `current == target`,
    trusting metadata; replug may have reassigned port names. *Fix:* skip
    only when the generated config matches what's on disk.
