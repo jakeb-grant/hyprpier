@@ -15,6 +15,7 @@ use crate::profile::{list_profiles, Profile};
 pub struct ProfileListState {
     pub profiles: Vec<ProfileInfo>,
     pub table_state: TableState,
+    pub error_message: Option<String>,
 }
 
 #[derive(Clone)]
@@ -72,6 +73,7 @@ impl ProfileListState {
         Ok(Self {
             profiles,
             table_state,
+            error_message: None,
         })
     }
 
@@ -142,10 +144,15 @@ pub fn render(frame: &mut Frame, state: &mut ProfileListState) {
         .alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
-    // Status bar (centered)
-    let status = build_status_line();
-    let status_bar = Paragraph::new(status)
-        .alignment(ratatui::layout::Alignment::Center);
+    // Status bar (centered); errors take its place until the next action
+    let status_bar = if let Some(err) = &state.error_message {
+        Paragraph::new(format!("Error: {}", err))
+            .style(styles::error())
+            .alignment(ratatui::layout::Alignment::Center)
+    } else {
+        Paragraph::new(build_status_line())
+            .alignment(ratatui::layout::Alignment::Center)
+    };
     frame.render_widget(status_bar, chunks[1]);
 
     // Table

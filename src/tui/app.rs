@@ -463,8 +463,12 @@ fn handle_profile_list_keys(key: KeyCode, state: &mut ProfileListState) -> Resul
         }
         KeyCode::Char('a') => {
             if let Some(name) = state.selected_profile() {
-                crate::apply::apply_profile_quiet(&name, false)?;
-                *state = ProfileListState::new()?;
+                // Show apply failures inline; a hyprctl hiccup shouldn't
+                // exit the whole TUI.
+                match crate::apply::apply_profile_quiet(&name, false) {
+                    Ok(()) => *state = ProfileListState::new()?,
+                    Err(e) => state.error_message = Some(format!("apply failed: {:#}", e)),
+                }
             }
             Ok(Action::None)
         }
@@ -650,7 +654,10 @@ fn handle_profile_editor_keys(key: KeyCode, state: &mut ProfileEditorState) -> R
             Ok(Action::None)
         }
         KeyCode::Char('d') => {
-            state.detect_monitors()?;
+            match state.detect_monitors() {
+                Ok(()) => state.error_message = None,
+                Err(e) => state.error_message = Some(format!("detect failed: {:#}", e)),
+            }
             Ok(Action::None)
         }
         KeyCode::Char('a') => Ok(Action::NewScreen(Box::new(Screen::MonitorArrange(

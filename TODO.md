@@ -38,7 +38,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
    Rotation display shows `450°` for transform 5. *Fix:* swap on odd
    transforms; rotate low 2 bits only; fix display.
 
-7. `[ ]` **One TUI keypress error kills the whole TUI** — `src/tui/app.rs`.
+7. `[x]` **One TUI keypress error kills the whole TUI** — `src/tui/app.rs`.
    `a` (apply) in the profile list and `d` (detect) in the editor propagate
    `?` up and exit the TUI. *Fix:* surface in an error message instead.
 
