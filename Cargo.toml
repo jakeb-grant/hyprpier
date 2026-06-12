@@ -1,6 +1,6 @@
 [package]
 name = "hyprpier"
-version = "0.1.0"
+version = "0.2.3"
 edition = "2021"
 description = "Hyprland monitor profile manager with Thunderbolt dock detection"
 license = "MIT"
