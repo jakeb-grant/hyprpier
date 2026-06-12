@@ -23,12 +23,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
 
 ## Correctness
 
-4. `[ ]` **Deleting a profile leaves dangling metadata** — `src/profile.rs`,
+4. `[x]` **Deleting a profile leaves dangling metadata** — `src/profile.rs`,
    `src/tui/app.rs`. `active_profile`, `dock_profiles`, `undocked_profile`
    can still reference the deleted name; daemon then fails on every dock
    event. *Fix:* scrub metadata references on delete.
 
-5. `[ ]` **Renaming a profile creates a copy** — `src/tui/app.rs`.
+5. `[x]` **Renaming a profile creates a copy** — `src/tui/app.rs`.
    Save under a new name leaves the old file and stale metadata references.
    *Fix:* rename semantics — delete old file, migrate metadata references.
 

@@ -319,11 +319,35 @@ fn handle_confirm_keys(key: KeyCode, dialog: &mut ConfirmDialog) -> Result<Actio
     }
 }
 
+/// Save the editor's profile. If the name changed since the profile was
+/// opened, treat it as a rename: remove the old file and re-point metadata
+/// references (active, dock links, undocked) at the new name.
+fn save_editor_profile(state: &mut ProfileEditorState) -> Result<()> {
+    state.sync_inputs_to_profile();
+    state.profile.save()?;
+
+    if let Some(old) = state.original_name.clone() {
+        if old != state.name_input {
+            Profile::delete(&old)?;
+            let mut metadata = crate::metadata::Metadata::load()?;
+            metadata.rename_profile_references(&old, &state.name_input);
+            metadata.save()?;
+        }
+    }
+    Ok(())
+}
+
 /// Execute the confirmed action
 fn execute_confirm_action(action: &ConfirmAction) -> Result<Action> {
     match action {
         ConfirmAction::DeleteProfile { name } => {
             Profile::delete(name)?;
+            // Scrub references so the daemon doesn't keep trying to apply
+            // a profile that no longer exists.
+            let mut metadata = crate::metadata::Metadata::load()?;
+            if metadata.remove_profile_references(name) {
+                metadata.save()?;
+            }
             Ok(Action::NewScreen(Box::new(Screen::ProfileList(
                 ProfileListState::new()?,
             ))))
@@ -335,8 +359,7 @@ fn execute_confirm_action(action: &ConfirmAction) -> Result<Action> {
                 state.error_message = Some(e.to_string());
                 return Ok(Action::NewScreen(Box::new(Screen::ProfileEditor(state))));
             }
-            state.sync_inputs_to_profile();
-            state.profile.save()?;
+            save_editor_profile(&mut state)?;
             Ok(Action::NewScreen(Box::new(Screen::ProfileList(
                 ProfileListState::new()?,
             ))))
@@ -660,8 +683,7 @@ fn handle_profile_editor_keys(key: KeyCode, state: &mut ProfileEditorState) -> R
                     },
                 ))))
             } else {
-                state.sync_inputs_to_profile();
-                state.profile.save()?;
+                save_editor_profile(state)?;
                 Ok(Action::NewScreen(Box::new(Screen::ProfileList(
                     ProfileListState::new()?,
                 ))))

@@ -72,6 +72,51 @@ impl Metadata {
         self.dock_profiles.get(uuid)
     }
 
+    /// Remove every reference to a profile (active, dock links, undocked).
+    /// Returns true if anything changed.
+    pub fn remove_profile_references(&mut self, profile: &str) -> bool {
+        let mut changed = false;
+        if self.active_profile.as_deref() == Some(profile) {
+            self.active_profile = None;
+            changed = true;
+        }
+        if self.undocked_profile.as_deref() == Some(profile) {
+            self.undocked_profile = None;
+            changed = true;
+        }
+        let before = self.dock_profiles.len();
+        self.dock_profiles.retain(|_, p| p != profile);
+        if self.dock_profiles.len() != before {
+            changed = true;
+        }
+        if changed {
+            self.touch();
+        }
+        changed
+    }
+
+    /// Re-point every reference to a profile at a new name (for renames).
+    pub fn rename_profile_references(&mut self, old: &str, new: &str) {
+        let mut changed = false;
+        if self.active_profile.as_deref() == Some(old) {
+            self.active_profile = Some(new.to_string());
+            changed = true;
+        }
+        if self.undocked_profile.as_deref() == Some(old) {
+            self.undocked_profile = Some(new.to_string());
+            changed = true;
+        }
+        for p in self.dock_profiles.values_mut() {
+            if p == old {
+                *p = new.to_string();
+                changed = true;
+            }
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
     /// Find which dock UUID is linked to a profile (reverse lookup)
     pub fn get_profile_dock(&self, profile: &str) -> Option<&String> {
         self.dock_profiles
