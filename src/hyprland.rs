@@ -296,7 +296,12 @@ pub fn write_config(profile: &Profile) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::write(&path, config)
+    // Temp + rename: Hyprland reads this file on `hyprctl reload` (including
+    // from the lid-open bind), so it must never observe a partial write.
+    let temp_path = path.with_extension("lua.tmp");
+    std::fs::write(&temp_path, config)
+        .with_context(|| format!("Failed to write {}", temp_path.display()))?;
+    std::fs::rename(&temp_path, &path)
         .with_context(|| format!("Failed to write {}", path.display()))?;
 
     Ok(())

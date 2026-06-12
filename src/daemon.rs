@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::apply;
@@ -50,6 +51,20 @@ fn find_socket_path() -> Result<PathBuf> {
 pub struct Daemon {
     socket_path: PathBuf,
     listener: UnixListener,
+    refresh_tx: mpsc::Sender<()>,
+}
+
+/// Debounced apply worker. A single dock plug fires several udev events;
+/// absorb them until SETTLE_DELAY_MS of quiet, then apply once. Keeping the
+/// sleep here (not in the accept loop) lets notify clients return instantly
+/// instead of blocking udev RUN+= processes for seconds.
+fn refresh_worker(rx: mpsc::Receiver<()>) {
+    while rx.recv().is_ok() {
+        while rx.recv_timeout(Duration::from_millis(SETTLE_DELAY_MS)).is_ok() {}
+        if let Err(e) = apply::apply_auto() {
+            eprintln!("Auto-apply failed: {}", e);
+        }
+    }
 }
 
 impl Daemon {
@@ -79,18 +94,21 @@ impl Daemon {
 
         println!("Hyprpier daemon listening on {}", socket_path.display());
 
+        let (refresh_tx, refresh_rx) = mpsc::channel();
+        std::thread::spawn(move || refresh_worker(refresh_rx));
+
         Ok(Self {
             socket_path,
             listener,
+            refresh_tx,
         })
     }
 
     /// Run the main event loop
     pub fn run(&mut self) -> Result<()> {
-        // Apply correct profile on startup (handles boot-with-dock-connected case)
-        if let Err(e) = apply::apply_auto() {
-            eprintln!("Initial auto-apply failed: {}", e);
-        }
+        // Apply correct profile on startup (handles boot-with-dock-connected
+        // case). Routed through the worker so all applies are serialized.
+        let _ = self.refresh_tx.send(());
 
         loop {
             match self.listener.accept() {
@@ -131,16 +149,11 @@ impl Daemon {
         }
     }
 
-    /// Handle refresh command - wait for dock to settle, then apply
+    /// Handle refresh command - queue a debounced apply and return at once
     fn handle_refresh(&mut self) -> String {
-        // Simple approach: always wait for devices to settle, then apply
-        // Multiple notify calls will each wait and apply, but apply_auto()
-        // is idempotent - applying the same profile twice is harmless
-        std::thread::sleep(Duration::from_millis(SETTLE_DELAY_MS));
-
-        match apply::apply_auto() {
-            Ok(_) => "OK\n".to_string(),
-            Err(e) => format!("ERROR: {}\n", e),
+        match self.refresh_tx.send(()) {
+            Ok(()) => "OK\n".to_string(),
+            Err(_) => "ERROR: refresh worker is gone\n".to_string(),
         }
     }
 

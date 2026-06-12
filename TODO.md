@@ -49,12 +49,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` fixed · `[-]` declined
 
 ## Design / robustness
 
-9. `[ ]` **Daemon serializes 3 s sleeps in the accept loop** —
+9. `[x]` **Daemon serializes 3 s sleeps in the accept loop** —
    `src/daemon.rs`. `notify` clients block ~3 s each; N udev events queue
    N×3 s serial sleeps + N redundant applies. *Fix:* debounce on a worker
    thread; reply to clients immediately.
 
-10. `[ ]` **`monitors.lua` written non-atomically** — `src/hyprland.rs`
+10. `[x]` **`monitors.lua` written non-atomically** — `src/hyprland.rs`
     `write_config` uses plain `fs::write`; it's the one file Hyprland
     actually reads (incl. mid-`hyprctl reload`). *Fix:* temp + rename.
 
