@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -55,6 +55,35 @@ fn hyprctl_command() -> Command {
 const MONITOR_APPLY_DELAY_MS: u64 = 1000;
 const WORKSPACE_MOVE_RETRY_DELAY_MS: u64 = 500;
 const WORKSPACE_MOVE_MAX_RETRIES: u8 = 3;
+
+/// Raw workspace info from hyprctl workspaces -j
+#[derive(Debug, Deserialize)]
+struct HyprWorkspace {
+    id: i64,
+    monitor: String,
+}
+
+/// Workspace reference nested in hyprctl clients/monitors -j output
+#[derive(Debug, Deserialize)]
+struct HyprWorkspaceRef {
+    id: i64,
+}
+
+/// Raw client info from hyprctl clients -j
+#[derive(Debug, Deserialize)]
+struct HyprClient {
+    address: String,
+    workspace: HyprWorkspaceRef,
+}
+
+/// Focus/active-workspace state from hyprctl monitors -j
+#[derive(Debug, Deserialize)]
+struct HyprMonitorState {
+    #[serde(default)]
+    focused: bool,
+    #[serde(rename = "activeWorkspace")]
+    active_workspace: HyprWorkspaceRef,
+}
 
 /// Raw monitor info from hyprctl monitors -j
 #[derive(Debug, Deserialize)]
@@ -336,6 +365,131 @@ pub fn move_workspace(workspace_id: u8, monitor: &str) -> Result<()> {
     hyprctl_eval(&expr).with_context(|| format!("Failed to move workspace {}", workspace_id))
 }
 
+/// Run `hyprctl <cmd> -j` and deserialize the JSON output.
+fn hyprctl_json<T: serde::de::DeserializeOwned>(cmd: &str) -> Result<T> {
+    let output = hyprctl_command()
+        .args([cmd, "-j"])
+        .output()
+        .with_context(|| format!("Failed to run hyprctl {}", cmd))?;
+
+    if !output.status.success() {
+        anyhow::bail!("hyprctl {} failed", cmd);
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("Failed to parse hyprctl {} output", cmd))
+}
+
+/// The workspace a monitor should land on per the profile: its `default`
+/// workspace, or the first one listed for it.
+fn default_workspace_for(profile: &Profile, monitor: &str) -> Option<u8> {
+    let mut first = None;
+    for ws in profile.workspaces.iter().filter(|w| w.monitor == monitor) {
+        if ws.default {
+            return Some(ws.id);
+        }
+        first.get_or_insert(ws.id);
+    }
+    first
+}
+
+/// Plan the eval expressions that fold orphan workspaces back into the
+/// profile's layout. Split from cleanup_orphan_workspaces for testability.
+///
+/// A monitor that comes up mid dock-transition, before the fresh workspace
+/// rules land, gets a fallback workspace from Hyprland with the next free ID
+/// (e.g. 11 alongside rules for 1-10). Those orphans survive the apply:
+/// their windows sit on a workspace no rule owns, and bars pinned to the
+/// profile's ranges have nothing to highlight. For each positive-ID
+/// workspace outside the profile, move its windows to the default workspace
+/// of the monitor it occupies, then focus that default wherever an orphan is
+/// a monitor's active workspace so the emptied orphan gets culled. Orphans
+/// on monitors with no profile workspaces are left alone (that monitor has
+/// nowhere else to go). Focus dispatches are ordered so focus ends up back
+/// on the monitor that had it.
+fn plan_orphan_cleanup(
+    profile: &Profile,
+    workspaces: &[HyprWorkspace],
+    clients: &[HyprClient],
+    monitors: &[HyprMonitorState],
+) -> Vec<String> {
+    let mut exprs = Vec::new();
+    if profile.workspaces.is_empty() {
+        return exprs;
+    }
+
+    let assigned: HashSet<i64> = profile.workspaces.iter().map(|w| w.id as i64).collect();
+    let mut orphan_targets: HashMap<i64, u8> = HashMap::new();
+    for ws in workspaces {
+        if ws.id > 0 && !assigned.contains(&ws.id) {
+            if let Some(target) = default_workspace_for(profile, &ws.monitor) {
+                orphan_targets.insert(ws.id, target);
+            }
+        }
+    }
+    if orphan_targets.is_empty() {
+        return exprs;
+    }
+
+    // Re-home each orphan's windows. window.move without `follow` keeps
+    // focus where it is.
+    for client in clients {
+        if let Some(target) = orphan_targets.get(&client.workspace.id) {
+            exprs.push(format!(
+                "hl.dispatch(hl.dsp.window.move({{ window = {}, workspace = {} }}))",
+                lua_str(&format!("address:{}", client.address)),
+                target
+            ));
+        }
+    }
+
+    // Switch monitors parked on an orphan over to their profile default.
+    // Focusing a workspace moves focus to its monitor, so handle the
+    // focused monitor last: switch it last if it's on an orphan, otherwise
+    // re-focus its current workspace after touching the others.
+    let mut focus_ids = Vec::new();
+    let mut focused_last = None;
+    let mut focused_restore = None;
+    for m in monitors {
+        let active = m.active_workspace.id;
+        match orphan_targets.get(&active) {
+            Some(&target) if m.focused => focused_last = Some(i64::from(target)),
+            Some(&target) => focus_ids.push(i64::from(target)),
+            None if m.focused => focused_restore = Some(active),
+            None => {}
+        }
+    }
+    if let Some(target) = focused_last {
+        focus_ids.push(target);
+    } else if let Some(active) = focused_restore {
+        if !focus_ids.is_empty() {
+            focus_ids.push(active);
+        }
+    }
+    for id in focus_ids {
+        exprs.push(format!(
+            "hl.dispatch(hl.dsp.focus({{ workspace = {} }}))",
+            id
+        ));
+    }
+
+    exprs
+}
+
+/// Query current Hyprland state and execute the orphan-workspace cleanup.
+pub fn cleanup_orphan_workspaces(profile: &Profile) -> Result<()> {
+    let workspaces: Vec<HyprWorkspace> = hyprctl_json("workspaces")?;
+    let clients: Vec<HyprClient> = hyprctl_json("clients")?;
+    let monitors: Vec<HyprMonitorState> = hyprctl_json("monitors")?;
+
+    for expr in plan_orphan_cleanup(profile, &workspaces, &clients, &monitors) {
+        if let Err(e) = hyprctl_eval(&expr) {
+            eprintln!("Warning: orphan workspace cleanup step failed: {}", e);
+        }
+    }
+    Ok(())
+}
+
 /// Run `hyprctl eval <expr>` and surface non-zero exit or in-band Lua errors.
 fn hyprctl_eval(expr: &str) -> Result<()> {
     let output = hyprctl_command()
@@ -396,7 +550,54 @@ pub fn apply_runtime(profile: &Profile) -> Result<()> {
         eprintln!("Warning: hyprctl reload failed after apply: {}", e);
     }
 
+    // The switch:on:Lid Switch bind is edge-triggered: applying a profile
+    // while the lid is already closed (dock-while-closed) never fires it,
+    // and both the apply above and the reload just re-enabled the lid
+    // monitor from monitors.lua. Re-assert the disable from current lid
+    // state. Must run after the reload, which would otherwise undo it.
+    if let Some(ref lid) = profile.lid_switch {
+        if lid.enabled && lid_is_closed() {
+            if let Some(m) = profile
+                .monitors
+                .iter()
+                .find(|m| m.name == lid.monitor && m.enabled)
+            {
+                let mut disabled = m.clone();
+                disabled.enabled = false;
+                if let Err(e) = apply_monitor(&disabled) {
+                    eprintln!(
+                        "Warning: Failed to disable {} for closed lid: {}",
+                        lid.monitor, e
+                    );
+                }
+            }
+        }
+    }
+
+    // Last, after any lid-disable re-homed its workspaces: fold fallback
+    // workspaces that appeared mid-transition back into the profile layout.
+    if let Err(e) = cleanup_orphan_workspaces(profile) {
+        eprintln!("Warning: Failed to clean up orphan workspaces: {}", e);
+    }
+
     Ok(())
+}
+
+/// Whether the laptop lid is currently closed, per the kernel's ACPI lid
+/// device (/proc/acpi/button/lid/*/state). Returns false when no lid device
+/// exists (desktops) or the state can't be read.
+fn lid_is_closed() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc/acpi/button/lid") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if let Ok(state) = std::fs::read_to_string(entry.path().join("state")) {
+            if state.contains("closed") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Run `hyprctl reload` to re-evaluate hyprland.lua (and the monitors.lua
@@ -863,5 +1064,97 @@ mod tests {
         assert_eq!(monitors[0].position.x, 0);
         assert_eq!(monitors[1].position.x, 1920);
         assert_eq!(monitors[2].position.x, 3840);
+    }
+
+    fn orphan_profile() -> Profile {
+        Profile {
+            name: "home".to_string(),
+            description: None,
+            monitors: vec![
+                Monitor::test_fixture("DP-2", "1920x1080", 1.0, 0),
+                Monitor::test_fixture("DP-6", "1920x1080", 1.0, 0),
+            ],
+            workspaces: vec![
+                Workspace { id: 1, monitor: "DP-2".to_string(), default: true },
+                Workspace { id: 2, monitor: "DP-2".to_string(), default: false },
+                Workspace { id: 6, monitor: "DP-6".to_string(), default: true },
+            ],
+            lid_switch: None,
+        }
+    }
+
+    fn ws(id: i64, monitor: &str) -> HyprWorkspace {
+        HyprWorkspace { id, monitor: monitor.to_string() }
+    }
+
+    fn client(address: &str, ws_id: i64) -> HyprClient {
+        HyprClient {
+            address: address.to_string(),
+            workspace: HyprWorkspaceRef { id: ws_id },
+        }
+    }
+
+    fn mon(focused: bool, active_ws: i64) -> HyprMonitorState {
+        HyprMonitorState {
+            focused,
+            active_workspace: HyprWorkspaceRef { id: active_ws },
+        }
+    }
+
+    #[test]
+    fn orphan_cleanup_rehomes_windows_and_restores_focus() {
+        // The dock-while-lid-closed aftermath: fallback workspace 11 grabbed
+        // DP-6 with a window on it, while the user is focused on DP-2/ws 1.
+        let exprs = plan_orphan_cleanup(
+            &orphan_profile(),
+            &[ws(1, "DP-2"), ws(2, "DP-2"), ws(11, "DP-6")],
+            &[client("0xabc", 1), client("0xdef", 11)],
+            &[mon(true, 1), mon(false, 11)],
+        );
+        assert_eq!(
+            exprs,
+            vec![
+                "hl.dispatch(hl.dsp.window.move({ window = \"address:0xdef\", workspace = 6 }))",
+                "hl.dispatch(hl.dsp.focus({ workspace = 6 }))",
+                "hl.dispatch(hl.dsp.focus({ workspace = 1 }))",
+            ]
+        );
+    }
+
+    #[test]
+    fn orphan_cleanup_focuses_focused_monitor_last() {
+        // Orphan is active on the focused monitor: switch it last, no
+        // extra re-focus needed.
+        let exprs = plan_orphan_cleanup(
+            &orphan_profile(),
+            &[ws(1, "DP-2"), ws(11, "DP-6")],
+            &[],
+            &[mon(false, 1), mon(true, 11)],
+        );
+        assert_eq!(exprs, vec!["hl.dispatch(hl.dsp.focus({ workspace = 6 }))"]);
+    }
+
+    #[test]
+    fn orphan_cleanup_skips_monitors_without_assignments() {
+        // eDP-1 has no profile workspaces; its fallback workspace is the
+        // only one it can show, so leave it (and its windows) alone.
+        let exprs = plan_orphan_cleanup(
+            &orphan_profile(),
+            &[ws(1, "DP-2"), ws(6, "DP-6"), ws(12, "eDP-1")],
+            &[client("0xabc", 12)],
+            &[mon(true, 1), mon(false, 6), mon(false, 12)],
+        );
+        assert!(exprs.is_empty(), "got: {:?}", exprs);
+    }
+
+    #[test]
+    fn orphan_cleanup_noop_when_workspaces_match_profile() {
+        let exprs = plan_orphan_cleanup(
+            &orphan_profile(),
+            &[ws(1, "DP-2"), ws(2, "DP-2"), ws(6, "DP-6")],
+            &[client("0xabc", 1)],
+            &[mon(true, 1), mon(false, 6)],
+        );
+        assert!(exprs.is_empty(), "got: {:?}", exprs);
     }
 }
