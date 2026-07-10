@@ -197,7 +197,7 @@ impl App {
 
         // Run sudo hyprpier <args>
         println!();
-        let _ = std::process::Command::new("sudo")
+        let status = std::process::Command::new("sudo")
             .arg(&exe)
             .args(args)
             .status();
@@ -215,6 +215,19 @@ impl App {
 
         // Refresh the current screen state
         self.refresh_screen()?;
+
+        // Surface failures in the TUI; any output the command printed was
+        // wiped when the alternate screen was re-entered
+        let error = match status {
+            Ok(s) if s.success() => None,
+            Ok(s) => Some(format!("sudo hyprpier exited with {}", s)),
+            Err(e) => Some(format!("failed to run sudo: {} (is sudo installed?)", e)),
+        };
+        if let Some(msg) = error {
+            if let Screen::Thunderbolt(state) = &mut self.screen {
+                state.error_message = Some(msg);
+            }
+        }
 
         Ok(())
     }
