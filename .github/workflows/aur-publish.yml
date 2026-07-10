@@ -22,7 +22,11 @@ jobs:
       - name: Compute pkgver
         id: pkgver
         run: |
-          VERSION=$(git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' || printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)")
+          if VERSION=$(git describe --long --tags 2>/dev/null); then
+            VERSION=$(sed 's/^v//;s/-/.r/;s/-/./' <<<"$VERSION")
+          else
+            VERSION=$(printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)")
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Computed pkgver: $VERSION"
 
