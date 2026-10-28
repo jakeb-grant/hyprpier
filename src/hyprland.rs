@@ -57,16 +57,30 @@ const WORKSPACE_MOVE_RETRY_DELAY_MS: u64 = 500;
 const WORKSPACE_MOVE_MAX_RETRIES: u8 = 3;
 
 /// Raw workspace info from hyprctl workspaces -j
+///
+/// `id` is only present for numbered workspaces on Hyprland 0.57+; named and
+/// special workspaces omit it (older versions gave them negative IDs).
 #[derive(Debug, Deserialize)]
 struct HyprWorkspace {
-    id: i64,
+    #[serde(default)]
+    id: Option<i64>,
     monitor: String,
 }
 
-/// Workspace reference nested in hyprctl clients/monitors -j output
+/// Workspace reference nested in hyprctl clients/monitors -j output.
+/// Same `id` semantics as [`HyprWorkspace`].
 #[derive(Debug, Deserialize)]
 struct HyprWorkspaceRef {
-    id: i64,
+    #[serde(default)]
+    id: Option<i64>,
+}
+
+impl HyprWorkspaceRef {
+    /// The ID if this is a regular numbered workspace (positive on every
+    /// Hyprland version), else None.
+    fn numbered_id(&self) -> Option<i64> {
+        self.id.filter(|&id| id > 0)
+    }
 }
 
 /// Raw client info from hyprctl clients -j
@@ -79,6 +93,7 @@ struct HyprClient {
 /// Focus/active-workspace state from hyprctl monitors -j
 #[derive(Debug, Deserialize)]
 struct HyprMonitorState {
+    name: String,
     #[serde(default)]
     focused: bool,
     #[serde(rename = "activeWorkspace")]
@@ -406,7 +421,8 @@ fn default_workspace_for(profile: &Profile, monitor: &str) -> Option<u8> {
 /// a monitor's active workspace so the emptied orphan gets culled. Orphans
 /// on monitors with no profile workspaces are left alone (that monitor has
 /// nowhere else to go). Focus dispatches are ordered so focus ends up back
-/// on the monitor that had it.
+/// on the monitor that had it. Named and special workspaces are never
+/// orphans.
 fn plan_orphan_cleanup(
     profile: &Profile,
     workspaces: &[HyprWorkspace],
@@ -421,9 +437,10 @@ fn plan_orphan_cleanup(
     let assigned: HashSet<i64> = profile.workspaces.iter().map(|w| w.id as i64).collect();
     let mut orphan_targets: HashMap<i64, u8> = HashMap::new();
     for ws in workspaces {
-        if ws.id > 0 && !assigned.contains(&ws.id) {
+        let Some(id) = ws.id.filter(|&id| id > 0) else { continue };
+        if !assigned.contains(&id) {
             if let Some(target) = default_workspace_for(profile, &ws.monitor) {
-                orphan_targets.insert(ws.id, target);
+                orphan_targets.insert(id, target);
             }
         }
     }
@@ -434,7 +451,8 @@ fn plan_orphan_cleanup(
     // Re-home each orphan's windows. window.move without `follow` keeps
     // focus where it is.
     for client in clients {
-        if let Some(target) = orphan_targets.get(&client.workspace.id) {
+        let Some(id) = client.workspace.numbered_id() else { continue };
+        if let Some(target) = orphan_targets.get(&id) {
             exprs.push(format!(
                 "hl.dispatch(hl.dsp.window.move({{ window = {}, workspace = {} }}))",
                 lua_str(&format!("address:{}", client.address)),
@@ -446,32 +464,35 @@ fn plan_orphan_cleanup(
     // Switch monitors parked on an orphan over to their profile default.
     // Focusing a workspace moves focus to its monitor, so handle the
     // focused monitor last: switch it last if it's on an orphan, otherwise
-    // re-focus its current workspace after touching the others.
-    let mut focus_ids = Vec::new();
+    // re-focus the monitor itself after touching the others (by name, since
+    // its active workspace may be named and have no ID to focus).
+    let focus_ws = |id: u8| format!("hl.dispatch(hl.dsp.focus({{ workspace = {} }}))", id);
+    let mut focus_exprs = Vec::new();
     let mut focused_last = None;
     let mut focused_restore = None;
     for m in monitors {
-        let active = m.active_workspace.id;
-        match orphan_targets.get(&active) {
-            Some(&target) if m.focused => focused_last = Some(i64::from(target)),
-            Some(&target) => focus_ids.push(i64::from(target)),
-            None if m.focused => focused_restore = Some(active),
+        let target = m
+            .active_workspace
+            .numbered_id()
+            .and_then(|id| orphan_targets.get(&id));
+        match target {
+            Some(&target) if m.focused => focused_last = Some(focus_ws(target)),
+            Some(&target) => focus_exprs.push(focus_ws(target)),
+            None if m.focused => focused_restore = Some(&m.name),
             None => {}
         }
     }
-    if let Some(target) = focused_last {
-        focus_ids.push(target);
-    } else if let Some(active) = focused_restore {
-        if !focus_ids.is_empty() {
-            focus_ids.push(active);
+    if let Some(expr) = focused_last {
+        focus_exprs.push(expr);
+    } else if let Some(name) = focused_restore {
+        if !focus_exprs.is_empty() {
+            focus_exprs.push(format!(
+                "hl.dispatch(hl.dsp.focus({{ monitor = {} }}))",
+                lua_str(name)
+            ));
         }
     }
-    for id in focus_ids {
-        exprs.push(format!(
-            "hl.dispatch(hl.dsp.focus({{ workspace = {} }}))",
-            id
-        ));
-    }
+    exprs.extend(focus_exprs);
 
     exprs
 }
@@ -1084,20 +1105,21 @@ mod tests {
     }
 
     fn ws(id: i64, monitor: &str) -> HyprWorkspace {
-        HyprWorkspace { id, monitor: monitor.to_string() }
+        HyprWorkspace { id: Some(id), monitor: monitor.to_string() }
     }
 
     fn client(address: &str, ws_id: i64) -> HyprClient {
         HyprClient {
             address: address.to_string(),
-            workspace: HyprWorkspaceRef { id: ws_id },
+            workspace: HyprWorkspaceRef { id: Some(ws_id) },
         }
     }
 
-    fn mon(focused: bool, active_ws: i64) -> HyprMonitorState {
+    fn mon(name: &str, focused: bool, active_ws: i64) -> HyprMonitorState {
         HyprMonitorState {
+            name: name.to_string(),
             focused,
-            active_workspace: HyprWorkspaceRef { id: active_ws },
+            active_workspace: HyprWorkspaceRef { id: Some(active_ws) },
         }
     }
 
@@ -1109,14 +1131,14 @@ mod tests {
             &orphan_profile(),
             &[ws(1, "DP-2"), ws(2, "DP-2"), ws(11, "DP-6")],
             &[client("0xabc", 1), client("0xdef", 11)],
-            &[mon(true, 1), mon(false, 11)],
+            &[mon("DP-2", true, 1), mon("DP-6", false, 11)],
         );
         assert_eq!(
             exprs,
             vec![
                 "hl.dispatch(hl.dsp.window.move({ window = \"address:0xdef\", workspace = 6 }))",
                 "hl.dispatch(hl.dsp.focus({ workspace = 6 }))",
-                "hl.dispatch(hl.dsp.focus({ workspace = 1 }))",
+                "hl.dispatch(hl.dsp.focus({ monitor = \"DP-2\" }))",
             ]
         );
     }
@@ -1129,7 +1151,7 @@ mod tests {
             &orphan_profile(),
             &[ws(1, "DP-2"), ws(11, "DP-6")],
             &[],
-            &[mon(false, 1), mon(true, 11)],
+            &[mon("DP-2", false, 1), mon("DP-6", true, 11)],
         );
         assert_eq!(exprs, vec!["hl.dispatch(hl.dsp.focus({ workspace = 6 }))"]);
     }
@@ -1142,7 +1164,7 @@ mod tests {
             &orphan_profile(),
             &[ws(1, "DP-2"), ws(6, "DP-6"), ws(12, "eDP-1")],
             &[client("0xabc", 12)],
-            &[mon(true, 1), mon(false, 6), mon(false, 12)],
+            &[mon("DP-2", true, 1), mon("DP-6", false, 6), mon("eDP-1", false, 12)],
         );
         assert!(exprs.is_empty(), "got: {:?}", exprs);
     }
@@ -1153,8 +1175,87 @@ mod tests {
             &orphan_profile(),
             &[ws(1, "DP-2"), ws(2, "DP-2"), ws(6, "DP-6")],
             &[client("0xabc", 1)],
-            &[mon(true, 1), mon(false, 6)],
+            &[mon("DP-2", true, 1), mon("DP-6", false, 6)],
         );
         assert!(exprs.is_empty(), "got: {:?}", exprs);
+    }
+
+    // Trimmed `hyprctl -j` output from Hyprland 0.57: named and special
+    // workspaces carry no "id" field.
+    const WORKSPACES_057: &str = r#"[
+        {"address": "1", "id": 1, "type": "normal", "name": "1", "monitor": "DP-2", "windows": 1},
+        {"address": "11", "id": 11, "type": "normal", "name": "11", "monitor": "DP-6", "windows": 1},
+        {"address": "special:magic", "type": "special", "name": "special:magic", "monitor": "DP-2", "windows": 1},
+        {"address": "code", "type": "normal", "name": "code", "monitor": "DP-2", "windows": 1}
+    ]"#;
+    const CLIENTS_057: &str = r#"[
+        {"address": "0xabc", "workspace": {"address": "1", "id": 1, "type": "normal", "name": "1"}},
+        {"address": "0xdef", "workspace": {"address": "11", "id": 11, "type": "normal", "name": "11"}},
+        {"address": "0x123", "workspace": {"address": "special:magic", "type": "special", "name": "special:magic"}},
+        {"address": "0x456", "workspace": {"address": "code", "type": "normal", "name": "code"}}
+    ]"#;
+    const MONITORS_057: &str = r#"[
+        {"name": "DP-2", "focused": true,
+         "activeWorkspace": {"address": "code", "type": "normal", "name": "code"},
+         "specialWorkspace": {"address": "", "type": "", "name": ""}},
+        {"name": "DP-6", "focused": false,
+         "activeWorkspace": {"address": "11", "id": 11, "type": "normal", "name": "11"},
+         "specialWorkspace": {"address": "", "type": "", "name": ""}}
+    ]"#;
+
+    #[test]
+    fn orphan_cleanup_handles_057_named_and_special_workspaces() {
+        let workspaces: Vec<HyprWorkspace> = serde_json::from_str(WORKSPACES_057).unwrap();
+        let clients: Vec<HyprClient> = serde_json::from_str(CLIENTS_057).unwrap();
+        let monitors: Vec<HyprMonitorState> = serde_json::from_str(MONITORS_057).unwrap();
+
+        // Only the numbered orphan (11) is folded back; the scratchpad and
+        // the named workspace are left alone, and focus returns to DP-2
+        // even though its active workspace has no ID.
+        let exprs = plan_orphan_cleanup(&orphan_profile(), &workspaces, &clients, &monitors);
+        assert_eq!(
+            exprs,
+            vec![
+                "hl.dispatch(hl.dsp.window.move({ window = \"address:0xdef\", workspace = 6 }))",
+                "hl.dispatch(hl.dsp.focus({ workspace = 6 }))",
+                "hl.dispatch(hl.dsp.focus({ monitor = \"DP-2\" }))",
+            ]
+        );
+    }
+
+    #[test]
+    fn hyprctl_json_056_negative_ids_still_parse_and_are_skipped() {
+        // Pre-0.57: every workspace has an "id", specials/named are negative.
+        let workspaces: Vec<HyprWorkspace> = serde_json::from_str(
+            r#"[{"id": 1, "name": "1", "monitor": "DP-2"},
+                {"id": -98, "name": "special:magic", "monitor": "DP-2"},
+                {"id": -1337, "name": "code", "monitor": "DP-6"}]"#,
+        )
+        .unwrap();
+        let clients: Vec<HyprClient> = serde_json::from_str(
+            r#"[{"address": "0x123", "workspace": {"id": -98, "name": "special:magic"}}]"#,
+        )
+        .unwrap();
+        let monitors: Vec<HyprMonitorState> = serde_json::from_str(
+            r#"[{"name": "DP-2", "focused": true, "activeWorkspace": {"id": 1, "name": "1"}},
+                {"name": "DP-6", "focused": false, "activeWorkspace": {"id": -1337, "name": "code"}}]"#,
+        )
+        .unwrap();
+        let exprs = plan_orphan_cleanup(&orphan_profile(), &workspaces, &clients, &monitors);
+        assert!(exprs.is_empty(), "got: {:?}", exprs);
+    }
+
+    #[test]
+    fn detect_monitors_parses_057_monitor_json() {
+        // Unrounded scale is new in 0.57 (#15628).
+        let monitors: Vec<HyprMonitor> = serde_json::from_str(
+            r#"[{"id": 0, "name": "DP-2", "description": "Dell U2720Q", "width": 3840,
+                 "height": 2160, "refreshRate": 59.99700, "x": 0, "y": 0,
+                 "activeWorkspace": {"address": "code", "type": "normal", "name": "code"},
+                 "scale": 1.6666666269302368, "transform": 0, "focused": true}]"#,
+        )
+        .unwrap();
+        assert_eq!(monitors[0].name, "DP-2");
+        assert!((monitors[0].scale - 1.6667).abs() < 1e-3);
     }
 }
